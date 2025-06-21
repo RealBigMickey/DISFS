@@ -21,7 +21,7 @@ clean:
 # Test the FUSE filesystem
 test: all
 	@mkdir -p mnt
-	@fusermount3 -u mnt 2>/dev/null || true
+	@fusermount3 -u mountdir 2>/dev/null || true
 	@sleep 0.2
 	@./$(TARGET) mnt &
 	@sleep 0.2
