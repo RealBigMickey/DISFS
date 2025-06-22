@@ -1,0 +1,11 @@
+import os
+from dotenv import load_dotenv
+
+PORT = 5050
+
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+VAULT_ID = [1385805289881600000, 1385805609403809803]
+NOTIFICATIONS_ID = 1385864919085219860
+

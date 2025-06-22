@@ -1,2 +1,6 @@
 test.c
+test
 .env
+main
+venv/
+Bot/__pycache__/
