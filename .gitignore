@@ -4,3 +4,7 @@ test
 main
 venv/
 Bot/__pycache__/
+.vscode/
+*.pyc
+*.o
+fs

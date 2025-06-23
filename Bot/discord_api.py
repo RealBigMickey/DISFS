@@ -11,6 +11,9 @@ class DiscordClient(discord.Client):
         print(f"{self.user} is now online.")
         self.ready_event.set()
 
+    async def wait_until_ready(self):
+        await self.ready_event.wait()
+
     async def send_dog_gif(self):
         await self.wait_until_ready()
         channel = self.get_channel(self.channel_id)

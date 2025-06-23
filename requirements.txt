@@ -2,3 +2,4 @@ discord.py
 aioconsole
 quart
 python-dotenv
+asyncpg
