@@ -32,14 +32,15 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
     if (strcmp(path, "/") == 0) {
         st->st_mode = S_IFDIR | 0755;
         st->st_nlink = 2;
+        st->st_uid = fuse_get_context()->uid;
+        st->st_gid = fuse_get_context()->gid;
         return 0;
     }
 
     if (strncmp(path, "/.", 2) == 0) {
         if (strcmp(path, "/.doggo") == 0 ||
             strncmp(path, CSTR_LEN("/.ping/")) == 0 ||
-            strncmp(path, CSTR_LEN("/.login/")) == 0 ||
-            strcmp(path, "/.logout") == 0) {
+            strcmp(path, "/.pong") == 0) {
 
             st->st_mode = S_IFREG | 0644;
             st->st_nlink = 1;
@@ -53,7 +54,7 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
     }
 
     if (!logged_in)
-        return -ENOENT;
+        return -EACCES;
     
     char url[256];
     snprintf(url, sizeof(url),
@@ -61,9 +62,23 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         current_user_id, path);
     
     string_buf_t resp;
-    if (http_get(url, &resp) != 0)
+    uint32_t status;
+    int rc = http_get(url, &resp, &status);
+
+    if (status == 520) {
+        free(resp.ptr);
+        return -ENOENT;
+    }
+
+    if (rc != 0) 
         return -EIO;
     
+
+    if (status != 200) {
+        free(resp.ptr);
+        return -EIO;
+    }
+
     
     // parse JSON
     cJSON *root = cJSON_Parse(resp.ptr);
@@ -93,6 +108,8 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         return -ENOENT;
     }
     
+    st->st_uid = fuse_get_context()->uid;
+    st->st_gid = fuse_get_context()->gid;
 
     SET_TIME(st_atime,  "atime");
     SET_TIME(st_mtime,  "mtime");
@@ -141,7 +158,7 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                     "http://"SERVER_IP"/listdir?user_id=%d&path=%s",
                      current_user_id, path);
         string_buf_t resp;
-        if (http_get(url,&resp) == 0) {
+        if (http_get(url, &resp, NULL) == 0) {
             cJSON *array = cJSON_Parse(resp.ptr);
             free(resp.ptr);
             if (cJSON_IsArray(array)) {
@@ -175,7 +192,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
 
               
             string_buf_t resp;
-            if (http_get(url, &resp) == 0) {
+            if (http_get(url, &resp, NULL) == 0) {
                 int id;
                 char name[32];
                 if (sscanf(resp.ptr, "%d:%32s", &id, name) == 2) {
@@ -191,8 +208,14 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
             }
         }
 
+        if (logged_in && strncmp(path, CSTR_LEN("/.pong")) == 0) {
+            current_user_id = 0;
+            logged_in = 0;
+            return snprintf(buf, size, "Successfully logged out.\n");
+        }
+
         if (strncmp(path, CSTR_LEN("/.doggo")) == 0) {
-            http_get("http://" SERVER_IP "/dog_gif", NULL);
+            http_get("http://" SERVER_IP "/dog_gif", NULL, NULL);
             return snprintf(buf, size, "Doggo gif sent to notification channel!\n");
         }
 
@@ -204,10 +227,49 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
     return -ENOENT;
 }
 
+
+static int do_mkdir(const char *path, mode_t mode)
+{
+    if (!logged_in)
+        return -EACCES;
+    char url[256];
+    snprintf(url, sizeof(url), "http://" SERVER_IP "/mkdir?user_id=%d&path=%s",
+                current_user_id, path);
+
+    CURL *c = curl_easy_init();
+    if (!c)
+        return -EIO;
+    
+    uint32_t status = 0;
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);         // <-- make it POST
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, "");   // empty body
+    curl_easy_setopt(c, CURLOPT_FAILONERROR, 0L);    // we want to inspect status
+
+    CURLcode rc = curl_easy_perform(c);
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(c);
+
+
+    if (rc != CURLE_OK)
+        return -EIO;
+    if (status == 201)
+        return 0;
+    if (status == 404)
+        return -ENOENT;
+    if (status == 403)
+        return -EACCES;
+    return -EIO;
+}
+
+
+
+
 static struct fuse_operations ops = {
     .getattr = do_getattr,
     .readdir = do_readdir,
     .read = do_read,
+    .mkdir = do_mkdir
 };
 
 int main(int argc, char *argv[])

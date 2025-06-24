@@ -10,4 +10,4 @@ typedef struct string_buf {
 
 size_t write_cb(void *data, size_t size, size_t nmemb, void *userp);
 
-int http_get(const char *url, string_buf_t *resp);
+int http_get(const char *url, string_buf_t *resp, u_int32_t *status);

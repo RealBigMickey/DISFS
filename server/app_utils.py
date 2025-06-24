@@ -5,8 +5,9 @@ import tempfile
 import aioconsole
 from discord import File
 from quart import abort, request
-from server._config import NOTIFICATIONS_ID
+from server._config import NOTIFICATIONS_ID, VAULT_ID
 
+current_vault = 1
 
 async def validate_user(POOL):
     """
@@ -33,7 +34,7 @@ async def dispatch_upload(POOL, discord_client, user_id, path, chunk, tmp_name):
     """
     await discord_client.wait_until_ready()
 
-    ch = discord_client.get_channel(NOTIFICATIONS_ID)
+    ch = discord_client.get_channel(VAULT_ID[0])
     msg = await ch.send(file=File(tmp_name, filename=f"{path}.chunk{chunk}"))
 
     async with POOL.acquire() as conn:
@@ -68,3 +69,35 @@ async def admin_console(discord_client, app):
                 print("Dog gif sent owo")
             case _:  # default case
                 print(f"Unknown command: \"{cmd}\"")
+
+
+async def create_closure(conn, new_id: int, parent_id: int | None):
+    await conn.execute(
+        """
+        INSERT INTO node_closure (ancestor, descendant, depth)
+        VALUES ($1, $1, 0)
+        ON CONFLICT (ancestor, descendant) DO NOTHING
+        """,
+        new_id
+    )
+
+    if parent_id is None:
+        return
+
+    rows = await conn.fetch(
+        """
+        SELECT ancestor, depth
+          FROM node_closure
+         WHERE descendant = $1
+        """,
+        parent_id
+    )
+
+    await conn.executemany(
+        """
+        INSERT INTO node_closure (ancestor, descendant, depth)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (ancestor, descendant) DO NOTHING
+        """,
+        [(r["ancestor"], new_id, r["depth"] + 1) for r in rows]
+    )

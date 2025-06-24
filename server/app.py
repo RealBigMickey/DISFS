@@ -1,5 +1,5 @@
 import asyncio
-from time import time
+import time
 import aioconsole
 import os
 from discord import File
@@ -9,7 +9,7 @@ from server.discord_api import get_client
 import asyncpg
 import tempfile
 
-from server.app_utils import validate_user, dispatch_upload, admin_console
+from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure
 
 
 import sys
@@ -83,15 +83,75 @@ async def upload():
     form-file field 'file'
     """
     user_id = await validate_user(POOL)
-    path = request.args.get("path", "").lstrip("/")
+    file_path = request.args.get("path", "").lstrip("/")
     chunk = int(request.args.get("chunk", 0))
     f = (await request.files)["file"]
-    
+
+    now = int(time.time())
+    parts = file_path.split("/")
+    filename = parts.pop()
+
+    # conn.transaction -> Ensures queries inside are executed atomically
+    async with POOL.acquire() as conn, conn.transaction():
+        parent_id = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL", 
+            user_id
+        )
+        for comp in parts:
+            nid = await conn.fetchval(
+                "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+                user_id,
+                parent_id,
+                comp
+            )
+
+            if nid is None:
+                nid = await conn.fetchval(
+                    """
+                    INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
+                                    i_mtime, i_ctime, i_crtime)
+                    VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
+                    RETURNING id
+                    """,
+                    user_id,
+                    comp,
+                    parent_id,
+                    now
+                )
+                await create_closure(conn, nid, parent_id)
+            parent_id = nid
+        
+        node_id = await conn.fetchval(
+            """
+            SELECT id FROM nodes
+            WHERE user_id=$1 AND parent_id=$2 AND name=$3
+            """,
+            user_id,
+            parent_id,
+            filename
+        )
+
+        if node_id is None:
+            node_id = await conn.fetchval(
+                """
+                INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
+                                i_mtime, i_ctime, i_crtime)
+                VALUES($1,$2,$3, 1 ,$4,$4,$4,$4)
+                RETURNING id
+                """,
+                user_id,
+                filename,
+                parent_id,
+                now
+            )
+            await create_closure(conn, node_id, parent_id)
+
+
     tmp = tempfile.NamedTemporaryFile(delete=False)
     await f.save(tmp.name)
 
     asyncio.create_task(
-        dispatch_upload(POOL, discord_client, user_id, path, chunk, tmp.name)
+        dispatch_upload(POOL, discord_client, user_id, file_path, chunk, tmp.name)
     )
     return "", 202
 
@@ -120,7 +180,7 @@ async def stat():
                 WHERE user_id=$1 AND parent_id=$2 AND name=$3
             """, user_id, parent_id, item)
             if node_id is None:
-                return "", 404
+                return "", 520  # 520 means not found
             else:
                 parent_id = node_id
         
@@ -146,7 +206,7 @@ async def stat():
 
     return jsonify(result)
 
-        
+
 
 
 
@@ -202,7 +262,68 @@ async def listdir():
     return jsonify(result)
 
 
+@app.route("/mkdir", methods=["POST"])
+async def mkdir():
+    user_id = await validate_user(POOL)
+    dir_path = request.args.get("path", "").lstrip("/")
 
+    if dir_path == "":
+        return "", 404
+    
+    parts = dir_path.split("/")
+    async with POOL.acquire() as conn, conn.transaction():
+        parent_id = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+        
+        if parent_id is None:
+            return 500
+        
+        now = int(time.time())
+        for i, comp in enumerate(parts):
+            node_id = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+            user_id,
+            parent_id,
+            comp
+            )
+
+            if node_id is None:
+                if i != len(parts) - 1:
+                    # Create missing intermediate directory
+                    node_id = await conn.fetchval(
+                        """
+                        INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
+                                            i_mtime, i_ctime, i_crtime)
+                        VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
+                        RETURNING id
+                        """,
+                        user_id,
+                        comp,
+                        parent_id,
+                        now
+                    )
+                    await create_closure(conn, node_id, parent_id)
+
+                else:
+                    # Create ACTUAL directory
+                    node_id = await conn.fetchval(
+                        """
+                        INSERT INTO nodes(user_id, name, parent_id, type,
+                                        i_atime, i_mtime, i_ctime, i_crtime)
+                        VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
+                        RETURNING id
+                        """,
+                        user_id,
+                        comp,
+                        parent_id,
+                        now
+                    )
+                    await create_closure(conn, node_id, parent_id)
+            parent_id = node_id
+        
+    return "", 201
 
 @app.route("/download", methods=["GET"])
 async def download():

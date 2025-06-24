@@ -18,8 +18,10 @@ size_t write_cb(void *data, size_t size, size_t nmemb, void *userp)
     return total;
 }
 
-
-int http_get(const char *url, string_buf_t *resp) {
+/* Returns 0 on successful HTTP request, else -1.
+ * If status exists, fill it with the HTTP response code.
+ */
+int http_get(const char *url, string_buf_t *resp, u_int32_t *status) {
     CURL *c = curl_easy_init();
     if (!c)
         return -1;
@@ -37,8 +39,16 @@ int http_get(const char *url, string_buf_t *resp) {
     }
 
     CURLcode rc = curl_easy_perform(c);
+
+    if (status)
+            curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
+    if (rc == CURLE_OK) {
+        curl_easy_cleanup(c);
+        return 0;
+    }
+
     curl_easy_cleanup(c);
-    return (rc == CURLE_OK) ? 0 : -1;
+    return -1;
 }
 
 
