@@ -1,4 +1,5 @@
 import asyncio
+from time import time
 import aioconsole
 import os
 from discord import File
@@ -7,6 +8,11 @@ from _config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL
 from discord_api import get_client
 import asyncpg
 import tempfile
+
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from dummySQL import seed_dummy_data
 
 
 app = Quart(__name__)
@@ -39,6 +45,7 @@ async def startup():
             "William"
         )
 
+    await seed_dummy_data(POOL)
     asyncio.create_task(discord_client.start(TOKEN))
     asyncio.create_task(admin_console())
         
@@ -125,6 +132,60 @@ async def dispatch_upload(user_id, path, chunk, tmp_name):
     os.unlink(tmp_name)
 
 
+
+@app.route("/stat", methods=["GET"])
+async def stat():
+    user_id = await validate_user()
+    raw_path = request.args.get("path", "").lstrip("/")
+    if raw_path == "":
+        now = int(time.time())
+        return jsonify({"type": 2, "atime": now, "mtime": now,
+                        "ctime": now, "crtime": now})
+    
+    parts = raw_path.split("/")
+    async with POOL.acquire() as conn:
+        parent_id = await conn.fetchval("""
+            SELECT id FROM nodes
+            WHERE user_id=$1 AND parent_id IS NULL
+        """, user_id)
+
+        node_id = None
+        for item in parts:
+            node_id = await conn.fetchval("""
+                SELECT id FROM nodes
+                WHERE user_id=$1 AND parent_id=$2 AND name=$3
+            """, user_id, parent_id, item)
+            if node_id is None:
+                return "", 404
+            else:
+                parent_id = node_id
+        
+        node_row = await conn.fetchrow("""
+            SELECT type, i_atime, i_mtime, i_ctime, i_crtime
+            FROM nodes WHERE id=$1
+        """, node_id)
+
+        result = {
+            "type": node_row["type"],
+            "atime": node_row["i_atime"],
+            "mtime": node_row["i_mtime"],
+            "ctime": node_row["i_ctime"],
+            "crtime": node_row["i_crtime"]
+        }
+
+        if node_row["type"] == 1:          # file → get size
+            size = await conn.fetchval("""
+                SELECT COALESCE(SUM(octet_length(message_id::text)),0)
+                FROM file_chunks WHERE node_id=$1
+            """, node_id)
+            result["size"] = size
+
+    return jsonify(result)
+
+        
+
+
+
 @app.route("/listdir", methods=["GET"])
 async def listdir():
     """
@@ -137,20 +198,45 @@ async def listdir():
     dir_path = dir_path.lstrip("/")
 
     async with POOL.acquire() as conn:
+        # 1) Resolve the parent directory node_id
+        # Start at the user’s root node (parent_id IS NULL)
+        parent_id = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+        if parent_id is None:
+            abort(404)
+
+        if dir_path:
+            for comp in dir_path.split("/"):
+                if not comp:
+                    continue
+                nid = await conn.fetchval(
+                    "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+                    user_id, parent_id, comp
+                )
+                if nid is None:
+                    abort(404)
+                parent_id = nid
+
         rows = await conn.fetch(
             """
-            SELECT DISTINCT
-                regexp_replace(
-                    substr(path, length($1)+1),
-                    '/.*', ''
-                ) AS entry
-            FROM uploads
-            WHERE user_id=$2 AND path LIKE $1||'%'
+            SELECT name, type, i_mtime
+              FROM nodes
+             WHERE user_id=$1
+               AND parent_id=$2
+             ORDER BY type DESC, name
             """,
-            dir_path, user_id
+            user_id, parent_id
         )
-    entries = [r["entry"] for r in rows]
-    return '\n'.join(entries) + '\n', 200, {"Content-Type": "text/plain"}
+
+    result = []
+    for r in rows:
+        entry = {"name": r["name"], "type": r["type"], "mtime": r["i_mtime"]}
+        result.append(entry)
+
+    return jsonify(result)
+
 
 
 
@@ -183,8 +269,11 @@ async def admin_console():
             case "exit":
                 print("Shutting down...")
                 await app.shutdown()
+            case "q":
+                print("Shutting down...")
+                await app.shutdown()
             case "status":
-                print("Not implemented yet!")  # TBD
+                print("Running... (Not implemented yet!)")  # TBD
             case "dog":
                 await discord_client.send_dog_gif()
                 print("Dog gif sent owo")

@@ -8,3 +8,5 @@ Bot/__pycache__/
 *.pyc
 *.o
 fs
+__pycache__/
+mnt
