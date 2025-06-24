@@ -2,7 +2,7 @@
 TARGET = main
 
 # Source files
-SRCS = main.c
+SRCS = main.c fuse_utils.c
 
 CC = gcc
 CFLAGS = -Wall -g `pkg-config fuse3 --cflags`
