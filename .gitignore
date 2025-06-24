@@ -1,12 +1,30 @@
-test.c
-test
-.env
-main
+# === Python Environment & Build Artifacts ===
+
+# Virtual environment
 venv/
-Bot/__pycache__/
-.vscode/
-*.pyc
-*.o
-fs
+
+# Python bytecode and cache
 __pycache__/
-mnt
+*.pyc
+*.pyo
+
+# IDE/editor settings
+.vscode/
+
+# Environment variables / secrets
+.env
+
+
+
+# === C Build Artifacts ===
+
+# Object files
+*.o
+
+# Compiled binaries
+main
+fs
+server/main
+
+# Runtime mount directory (FUSE)
+mnt/

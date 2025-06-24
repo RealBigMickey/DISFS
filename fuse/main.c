@@ -1,7 +1,6 @@
 #define FUSE_USE_VERSION 314
+#include <sys/types.h>
 #include <fuse3/fuse.h>
-
-#include <sys/stat.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
