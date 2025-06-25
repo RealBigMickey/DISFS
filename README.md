@@ -43,3 +43,10 @@ type = 1 -> file
 type = 2 -> directory
 
 Uses 'Closure tables' in PostgreSQL.
+
+
+logical_path -> virtual file path as seen by the FUSE user
+local_path -> ACTUAL path on local filesystem
+
+
+file cache stored at -> HOME/.cache/disfs/{user_id}/{local_path}

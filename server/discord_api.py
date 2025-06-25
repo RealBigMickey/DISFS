@@ -1,5 +1,6 @@
 import discord
 import asyncio
+import aiohttp
 
 class DiscordClient(discord.Client):
     def __init__(self, channel_id, *args, **kwargs):
@@ -19,6 +20,27 @@ class DiscordClient(discord.Client):
         channel = self.get_channel(self.channel_id)
         if channel:
             await channel.send("https://github.com/RealBigMickey/Linux2025/blob/main/doggo%20coding.gif?raw=true")
+    
+
+    async def download_attachment(self, message_id):
+        await self.wait_until_ready()
+        channel = self.get_channel(self.channel_id)
+        if not channel:
+            raise ValueError("Channel not found")
+        try:
+            msg = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            raise ValueError("Message not found")
+        if not msg.attachments:
+            raise ValueError("No attachments found on this message")
+        url = msg.attachments[0].url
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                return await resp.read()
+
+
 
 def get_client(channel_id):
     intents = discord.Intents.default()

@@ -5,7 +5,7 @@ import tempfile
 import aioconsole
 from discord import File
 from quart import abort, request
-from server._config import NOTIFICATIONS_ID, VAULT_ID
+from server._config import NOTIFICATIONS_ID
 
 current_vault = 1
 
@@ -28,13 +28,13 @@ async def validate_user(POOL):
     return uid
 
 
-async def dispatch_upload(POOL, discord_client, user_id, path, chunk, tmp_name):
+async def dispatch_upload(POOL, discord_client, user_id, path, chunk, chunk_size ,tmp_name):
     """
     Upload one chunk file to Discord and record message_id in DB.
     """
     await discord_client.wait_until_ready()
 
-    ch = discord_client.get_channel(VAULT_ID[0])
+    ch = discord_client.get_channel(discord_client.channel_id)
     msg = await ch.send(file=File(tmp_name, filename=f"{path}.chunk{chunk}"))
 
     async with POOL.acquire() as conn:

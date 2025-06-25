@@ -3,8 +3,8 @@ import time
 import aioconsole
 import os
 from discord import File
-from quart import Quart, request, abort, jsonify
-from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL
+from quart import Quart, request, abort, jsonify, Response
+from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS
 from server.discord_api import get_client
 import asyncpg
 import tempfile
@@ -14,7 +14,7 @@ from server.app_utils import validate_user, dispatch_upload, admin_console, crea
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from dummySQL import seed_dummy_data
+from dummySQL import seed_dummy_data, seed_foo_txt
 
 
 app = Quart(__name__)
@@ -48,8 +48,10 @@ async def startup():
         )
 
     await seed_dummy_data(POOL)
+    await seed_foo_txt(POOL)
     asyncio.create_task(discord_client.start(TOKEN))
     asyncio.create_task(admin_console(discord_client, app))
+    discord_client.channel_id = VAULT_IDS[0]
         
 
 def require_login():
@@ -150,8 +152,11 @@ async def upload():
     tmp = tempfile.NamedTemporaryFile(delete=False)
     await f.save(tmp.name)
 
+    chunk_size = os.path.getsize(tmp.name)
+
     asyncio.create_task(
-        dispatch_upload(POOL, discord_client, user_id, file_path, chunk, tmp.name)
+        dispatch_upload(POOL, discord_client, user_id, file_path, chunk,
+                        chunk_size, tmp.name)
     )
     return "", 202
 
@@ -168,26 +173,29 @@ async def stat():
     
     parts = raw_path.split("/")
     async with POOL.acquire() as conn:
-        parent_id = await conn.fetchval("""
+        parent_id = await conn.fetchval(
+            """
             SELECT id FROM nodes
             WHERE user_id=$1 AND parent_id IS NULL
-        """, user_id)
+            """, user_id)
 
         node_id = None
         for item in parts:
-            node_id = await conn.fetchval("""
+            node_id = await conn.fetchval(
+                """
                 SELECT id FROM nodes
                 WHERE user_id=$1 AND parent_id=$2 AND name=$3
-            """, user_id, parent_id, item)
+                """, user_id, parent_id, item)
             if node_id is None:
                 return "", 520  # 520 means not found
             else:
                 parent_id = node_id
-        
-        node_row = await conn.fetchrow("""
+
+        node_row = await conn.fetchrow(
+            """
             SELECT type, i_atime, i_mtime, i_ctime, i_crtime
             FROM nodes WHERE id=$1
-        """, node_id)
+            """, node_id)
 
         result = {
             "type": node_row["type"],
@@ -197,10 +205,11 @@ async def stat():
             "crtime": node_row["i_crtime"]
         }
 
-        if node_row["type"] == 1:          # file → get size
-            size = await conn.fetchval("""
-                SELECT COALESCE(SUM(octet_length(message_id::text)),0)
-                FROM file_chunks WHERE node_id=$1
+        if node_row["type"] == 1:
+            size = await conn.fetchval(
+            """
+            SELECT COALESCE(SUM(chunk_size), 0)
+            FROM file_chunks WHERE node_id=$1
             """, node_id)
             result["size"] = size
 
@@ -222,8 +231,6 @@ async def listdir():
     dir_path = dir_path.lstrip("/")
 
     async with POOL.acquire() as conn:
-        # 1) Resolve the parent directory node_id
-        # Start at the user’s root node (parent_id IS NULL)
         parent_id = await conn.fetchval(
             "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
             user_id
@@ -327,8 +334,51 @@ async def mkdir():
 
 @app.route("/download", methods=["GET"])
 async def download():
-    print("Download not implemented yet!");
-    return "TBD\n", 200
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    if not raw_path:
+        abort(400)
+
+    parts = raw_path.split("/")
+    async with POOL.acquire() as conn:
+        parent_id = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+        node_id = None
+        for comp in parts:
+            node_id = await conn.fetchval(
+                "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+                user_id, parent_id, comp
+            )
+            if node_id is None:
+                abort(404)
+            parent_id = node_id
+        
+        typ = await conn.fetchval("SELECT type FROM nodes WHERE id=$1", node_id)
+        if typ != 1:
+            abort(400)
+
+        # Get chunks in order
+        rows = await conn.fetch(
+            """
+            SELECT chunk_index, message_id
+            FROM file_chunks
+            WHERE node_id=$1
+            ORDER BY chunk_index
+            """,
+            node_id
+        )
+        if not rows:
+            abort(500, "no chunks")
+
+    async def streamer():
+        for r in rows:
+            chunk = await discord_client.download_attachment(r["message_id"])
+            yield chunk
+
+    # stream the file over in waves of chunks
+    return Response(streamer(), status=200, mimetype="application/octet-stream")
 
 
 @app.route("/ping", methods=["GET"])

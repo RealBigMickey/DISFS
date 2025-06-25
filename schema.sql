@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS node_closure (
 CREATE TABLE IF NOT EXISTS file_chunks (
   node_id     INT    NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,  -- must be type=1
   chunk_index INT    NOT NULL,
+  chunk_size  INT,
   message_id  BIGINT, 
   PRIMARY KEY (node_id, chunk_index)
 );

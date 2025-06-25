@@ -13,7 +13,7 @@ all: $(TARGET)
 	$(MAKE) mount
 
 
-# Instead of building from souces, we build from objects.
+# Instead of building from souces, build from objects.
 # Saving on having to rebuild everything everytime
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -26,13 +26,13 @@ clean:
 
 mount:
 	@mkdir -p mnt
-	@fusermount3 -u mnt 2>/dev/null || true
+	@fusermount3 -uz mnt 2>/dev/null || true
 	@sleep 0.1
 	@./$(TARGET) mnt &
 	@sleep 0.1
 
 unmount:
-	@fusermount3 -u mnt 2>/dev/null || true
+	@fusermount3 -uz mnt 2>/dev/null || true
 
 
 # Declare commands

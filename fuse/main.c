@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <libgen.h>
 #include <cjson/cJSON.h>
 #include "fuse_utils.h"
 
@@ -222,9 +224,16 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
         return snprintf(buf, size, "Unknown command, 'ls .' for HELP.\n");
     }
 
-    if(!logged_in)
+
+    if (!logged_in) {
         return snprintf(buf, size, LOGIN_TEXT);
-    return -ENOENT;
+    }
+
+    // do_open and stored fd in fi->fh
+    ssize_t n = pread((int)fi->fh, buf, size, offset);
+    if (n < 0)
+        return -errno;
+    return (int)n;
 }
 
 
@@ -242,9 +251,9 @@ static int do_mkdir(const char *path, mode_t mode)
     
     uint32_t status = 0;
     curl_easy_setopt(c, CURLOPT_URL, url);
-    curl_easy_setopt(c, CURLOPT_POST, 1L);         // <-- make it POST
+    curl_easy_setopt(c, CURLOPT_POST, 1L);         // make it POST
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, "");   // empty body
-    curl_easy_setopt(c, CURLOPT_FAILONERROR, 0L);    // we want to inspect status
+    curl_easy_setopt(c, CURLOPT_FAILONERROR, 0L);    // inspect status
 
     CURLcode rc = curl_easy_perform(c);
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
@@ -264,12 +273,74 @@ static int do_mkdir(const char *path, mode_t mode)
 
 
 
+static int do_open(const char *path, struct fuse_file_info *fi) {
+    if (!logged_in && strncmp(path, CSTR_LEN("/.ping/")) == 0)
+        return 0;
+
+    if (!logged_in)
+        return -EACCES;
+
+    /* cache stored at -> HOME/.cache/disfs/{user_id}/{local_path}  */
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+             "%s/.cache/disfs%s", getenv("HOME"), path);
+
+    /* remove stale cache (If it's even there) */
+    unlink(cache_path);
+
+    char *dup = strdup(cache_path);
+    char *dir = dirname(dup);
+    mkdir_p(dir);
+    free(dup);
+
+    char url[512];
+    snprintf(url, sizeof(url),
+             "http://" SERVER_IP "/download?user_id=%d&path=%s",
+             current_user_id, path);
+
+    FILE *fp = fopen(cache_path, "wb");
+    if (!fp)
+        return -errno;
+
+    if (http_get_stream(url, fp) != 0) {
+        fclose(fp);
+        unlink(cache_path);
+        return -EIO;
+    }
+    fclose(fp);
+
+    /* stash fd in fi->fh */
+    int fd = open(cache_path, O_RDONLY);
+    if (fd < 0) {
+        unlink(cache_path);
+        return -errno;
+    }
+    fi->fh = fd;
+    return 0;
+}
+
+
+static int do_release(const char *path, struct fuse_file_info *fi) {
+    close((int)fi->fh);
+    /* delete cache */
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+             "%s/.cache/disfs%s", getenv("HOME"), path);
+    unlink(cache_path);
+    return 0;
+}
+
+
+
+
 
 static struct fuse_operations ops = {
     .getattr = do_getattr,
     .readdir = do_readdir,
     .read = do_read,
-    .mkdir = do_mkdir
+    .mkdir = do_mkdir,
+    .open = do_open,
+    .release = do_release
 };
 
 int main(int argc, char *argv[])
