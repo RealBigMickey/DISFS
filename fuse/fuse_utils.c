@@ -26,14 +26,20 @@ static size_t write_file_cb(void *ptr, size_t sz, size_t nm, void *userdata) {
 
 /* Returns 0 on successful HTTP request, else -1.
  * If status exists, fill it with the HTTP response code.
+ * LSB on status's address dictates GET or POST,
+ * GET -> 0, POST -> 1
  */
-int http_get(const char *url, string_buf_t *resp, u_int32_t *status) {
+int http_get(const char *url, string_buf_t *resp, uint32_t *status) {
     CURL *c = curl_easy_init();
     if (!c)
         return -1;
 
     curl_easy_setopt(c, CURLOPT_URL, url);
-    curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);  // failure on 4XX 5XX 
+    curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);  // failure on > 400
+
+    if ((uintptr_t)status & 1)
+        curl_easy_setopt(c, CURLOPT_POST, 1L);  // make it POST
+
 
     if (resp) {
         resp->ptr = malloc(1);
@@ -66,6 +72,35 @@ int http_get_stream(const char *url, FILE *out) {
     curl_easy_cleanup(c);
     return (rc == CURLE_OK) ? 0 : -1;
 }
+
+
+/* Sends file through http */
+int http_post_stream(const char *url, const void *data, size_t len, uint32_t *status)
+{
+    CURL *c = curl_easy_init();
+    if (!c)
+        return -1;
+    
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
+
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, data);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)len);
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    
+    CURLcode rc = curl_easy_perform(c);
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(c);
+
+    if (status)
+            curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
+    return (rc == CURLE_OK) ? 0 : -1;
+}
+
 
 
 void mkdir_p(const char *dir) {

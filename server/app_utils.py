@@ -1,11 +1,12 @@
 import asyncio
 import os
 import tempfile
-
+import time
 import aioconsole
 from discord import File
 from quart import abort, request
 from server._config import NOTIFICATIONS_ID
+
 
 current_vault = 1
 
@@ -28,26 +29,62 @@ async def validate_user(POOL):
     return uid
 
 
-async def dispatch_upload(POOL, discord_client, user_id, path, chunk, chunk_size ,tmp_name):
+async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, chunk_size ,tmp_name):
     """
     Upload one chunk file to Discord and record message_id in DB.
     """
     await discord_client.wait_until_ready()
 
-    ch = discord_client.get_channel(discord_client.channel_id)
-    msg = await ch.send(file=File(tmp_name, filename=f"{path}.chunk{chunk}"))
+    node_id = None
+    parts = file_path.split("/")
 
+    # Check path
+    async with POOL.acquire() as conn:
+        parent = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+        for comp in parts:
+            nid = await conn.fetchval(
+                """
+                SELECT id FROM nodes
+                WHERE user_id=$1 AND parent_id=$2 AND name=$3
+                """,
+                user_id, parent, comp
+            )
+            if nid is None:
+                # path should've been added by `/upload`
+                return
+            parent = nid
+        node_id = nid
+
+    # Send to discord
+    channel = discord_client.get_channel(discord_client.channel_id)
+    msg = await channel.send(file=File(tmp_name))
+
+    # Insert into db
     async with POOL.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO uploads(user_id, path, chunk, message_id)
+            INSERT INTO file_chunks(node_id, chunk_index, chunk_size, message_id)
             VALUES($1,$2,$3,$4)
-            ON CONFLICT(user_id,path,chunk)
-              DO UPDATE SET message_id = EXCLUDED.message_id;
             """,
-            user_id, path, chunk, msg.id
+            node_id, chunk, chunk, msg.id
         )
-    os.unlink(tmp_name)
+
+        # update access time
+        await conn.execute(
+            "UPDATE nodes SET i_mtime=$1 WHERE id=$2",
+            int(time.time(), node_id)
+        )
+
+
+    try:
+        os.unlink(tmp_name)
+    except OSError:
+        print("An upload request failed!")
+        pass    
+
 
 
 async def admin_console(discord_client, app):

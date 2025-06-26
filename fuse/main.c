@@ -1,5 +1,4 @@
 #define FUSE_USE_VERSION 314
-#include <sys/types.h>
 #include <fuse3/fuse.h>
 #include <errno.h>
 #include <stdio.h>
@@ -9,8 +8,6 @@
 #include <libgen.h>
 #include <cjson/cJSON.h>
 #include "fuse_utils.h"
-
-
 
 #define SERVER_IP "127.0.0.1:5050"
 static int current_user_id;
@@ -58,7 +55,7 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
     if (!logged_in)
         return -EACCES;
     
-    char url[256];
+    char url[URL_MAX];
     snprintf(url, sizeof(url),
         "http://" SERVER_IP "/stat?user_id=%d&path=%s",
         current_user_id, path);
@@ -72,8 +69,8 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         return -ENOENT;
     }
 
-    if (rc != 0) 
-        return -EIO;
+    if (rc != 0)
+        return -ECOMM;
     
 
     if (status != 200) {
@@ -155,7 +152,7 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 
     if (logged_in) {
-        char url[512];
+        char url[URL_MAX];
         snprintf(url,sizeof(url),
                     "http://"SERVER_IP"/listdir?user_id=%d&path=%s",
                      current_user_id, path);
@@ -188,7 +185,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
         if (!logged_in && 
           strncmp(path, CSTR_LEN("/.ping/")) == 0) {
             const char *username = path + sizeof("/.ping/") - 1;
-            char url[256];
+            char url[URL_MAX];
             snprintf(url, sizeof(url),
               "http://" SERVER_IP "/login?user=%s", username);
 
@@ -241,7 +238,7 @@ static int do_mkdir(const char *path, mode_t mode)
 {
     if (!logged_in)
         return -EACCES;
-    char url[256];
+    char url[URL_MAX];
     snprintf(url, sizeof(url), "http://" SERVER_IP "/mkdir?user_id=%d&path=%s",
                 current_user_id, path);
 
@@ -273,7 +270,8 @@ static int do_mkdir(const char *path, mode_t mode)
 
 
 
-static int do_open(const char *path, struct fuse_file_info *fi) {
+static int do_open(const char *path, struct fuse_file_info *fi)
+{
     if (!logged_in && strncmp(path, CSTR_LEN("/.ping/")) == 0)
         return 0;
 
@@ -293,7 +291,7 @@ static int do_open(const char *path, struct fuse_file_info *fi) {
     mkdir_p(dir);
     free(dup);
 
-    char url[512];
+    char url[URL_MAX];
     snprintf(url, sizeof(url),
              "http://" SERVER_IP "/download?user_id=%d&path=%s",
              current_user_id, path);
@@ -305,7 +303,7 @@ static int do_open(const char *path, struct fuse_file_info *fi) {
     if (http_get_stream(url, fp) != 0) {
         fclose(fp);
         unlink(cache_path);
-        return -EIO;
+        return -ECOMM;
     }
     fclose(fp);
 
@@ -320,13 +318,90 @@ static int do_open(const char *path, struct fuse_file_info *fi) {
 }
 
 
-static int do_release(const char *path, struct fuse_file_info *fi) {
+static int do_release(const char *path, struct fuse_file_info *fi)
+{
     close((int)fi->fh);
-    /* delete cache */
+
     char cache_path[PATH_MAX];
     snprintf(cache_path, sizeof(cache_path),
              "%s/.cache/disfs%s", getenv("HOME"), path);
-    unlink(cache_path);
+
+    FILE *fp = fopen(cache_path, "rb");
+    if (!fp)
+        return -errno;
+    
+    void *chunk_buf = malloc(CHUNK_SIZE);
+    if (!chunk_buf){
+        fclose(fp);
+        return -ENOMEM;
+    }
+
+
+    int returner = 0;
+    int chunk = 0;
+    size_t n;
+    while ((n = fread(chunk_buf, 1, CHUNK_SIZE, fp)) > 0) {
+        char url[URL_MAX];
+        snprintf(url, sizeof(url),
+                "http://" SERVER_IP "/upload?user_id=%d&path=%s&chunk=%d",
+                current_user_id, path, chunk);
+
+        uint32_t status;
+        if (http_post_stream(url, chunk_buf, n, &status) != 0)
+            returner = -ECOMM;
+        
+        if (status != 200)
+            returner = -EIO;
+
+        chunk++;
+    }
+    free(chunk_buf);
+    fclose(fp);
+
+    if(returner == 0)
+        if (unlink(cache_path) != 0)
+            returner = -errno;
+
+    return returner;
+}
+
+static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    if (!logged_in)
+        return -EACCES;
+    
+
+    uint32_t status;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+
+    
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+             "http://" SERVER_IP "/create?user_id=%d&path=%s",
+             current_user_id, path);
+
+
+    if (http_get(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+    
+    if (status != 520)
+        return -EEXIST;
+    
+
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+             "%s/.cache/disfs%s", getenv("HOME"), path);
+    
+    char *tmp = strdup(cache_path);
+    mkdir_p(dirname(tmp));
+    free(tmp);
+
+    int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
+
+    if (fd < 0)
+        return -errno;
+    
+    fi->fh = fd;
     return 0;
 }
 
@@ -340,7 +415,8 @@ static struct fuse_operations ops = {
     .read = do_read,
     .mkdir = do_mkdir,
     .open = do_open,
-    .release = do_release
+    .release = do_release,
+    .create = do_create
 };
 
 int main(int argc, char *argv[])

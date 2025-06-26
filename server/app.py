@@ -86,6 +86,9 @@ async def upload():
     """
     user_id = await validate_user(POOL)
     file_path = request.args.get("path", "").lstrip("/")
+    if not file_path:
+        abort(400, "Missing path")
+
     chunk = int(request.args.get("chunk", 0))
     f = (await request.files)["file"]
 
@@ -379,6 +382,74 @@ async def download():
 
     # stream the file over in waves of chunks
     return Response(streamer(), status=200, mimetype="application/octet-stream")
+
+
+
+@app.route("/create", methods=["POST"])
+async def create_file():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/");
+
+    if not raw_path:
+        abort(400)
+    
+    parts = raw_path.split("/")
+    file_name = parts.pop()
+    now = int(time.time())
+
+    async with POOL.acquire() as conn, conn.transaction():
+        parent = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+
+        for comp in parts:
+            nid = await conn.fetchval(
+                """
+                SELECT id FROM nodes
+                WHERE user_id=$1 AND parent_id=$2 AND name=$3
+                """,
+                user_id, parent, comp
+            )
+            if nid is None:
+                nid = await conn.fetchval(
+                    """
+                    INSERT INTO nodes(user_id, name, parent_id, type,
+                    i_atime, i_mtime, i_ctime, i_crtime)
+                    VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
+                    RETURNING id
+                    """,
+                    user_id, comp, parent, now
+                )
+                await create_closure(conn, nid, parent)
+            parent = nid
+
+
+
+        # just in case the file DOES exist
+        check_exists = await conn.fetchval(
+            """
+            SELECT 1 FROM nodes
+            WHERE user_id=$1 AND parent_id=$2 AND name=$3
+            """,
+            user_id, parent, file_name
+        )
+        if check_exists:
+            abort(420)
+        
+
+        nid = await conn.fetchval(
+            """
+            INSERT INTO nodes(user_id, name, parent_id, type,
+            i_atime, i_mtime, i_ctime, i_crtime)
+            VALUES($1,$2,$3, 1 ,$4,$4,$4,$4)
+            RETURNING id
+            """,
+            user_id, file_name, parent, now)
+        await create_closure(conn, nid, parent)
+
+    return "", 200
+
 
 
 @app.route("/ping", methods=["GET"])
