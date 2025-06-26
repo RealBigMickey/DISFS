@@ -1,30 +1,20 @@
-# === Python Environment & Build Artifacts ===
-
-# Virtual environment
-venv/
-
-# Python bytecode and cache
+# === Python Artifacts ===
 __pycache__/
 *.pyc
 *.pyo
 
-# IDE/editor settings
-.vscode/
 
-# Environment variables / secrets
-.env
-
-
-
-# === C Build Artifacts ===
-
-# Object files
+# === C Artifacts ===
 *.o
-
-# Compiled binaries
 main
 fs
 server/main
 
-# Runtime mount directory (FUSE)
+
+
+# === Miscellaneous ===
+venv/
 mnt/
+.vscode/
+.env
+logs.txt

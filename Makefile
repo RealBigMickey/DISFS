@@ -26,6 +26,7 @@ clean:
 
 mount:
 	@mkdir -p mnt
+	@rm -f logs.txt
 	@fusermount3 -uz mnt 2>/dev/null || true
 	@sleep 0.1
 	@./$(TARGET) mnt &

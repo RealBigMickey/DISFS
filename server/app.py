@@ -73,95 +73,51 @@ async def login():
     if row is None:
         return "", 404
     
-    return f"{row['id']}:{user}\n", 200, {"Content-Type": "text/plain"}
+    return f"{row['id']}:{user}\n", 201, {"Content-Type": "text/plain"}
 
 
 
 
-@app.route("/upload", methods=["GET"])
+@app.route("/upload", methods=["POST"])
 async def upload():
     """
     POST /upload?user_id=22&path=foo/bar.txt&chunk=0
     form-file field 'file'
     """
     user_id = await validate_user(POOL)
+
     file_path = request.args.get("path", "").lstrip("/")
     if not file_path:
         abort(400, "Missing path")
 
-    chunk = int(request.args.get("chunk", 0))
-    f = (await request.files)["file"]
-
-    now = int(time.time())
-    parts = file_path.split("/")
-    filename = parts.pop()
-
-    # conn.transaction -> Ensures queries inside are executed atomically
-    async with POOL.acquire() as conn, conn.transaction():
-        parent_id = await conn.fetchval(
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL", 
-            user_id
-        )
-        for comp in parts:
-            nid = await conn.fetchval(
-                "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-                user_id,
-                parent_id,
-                comp
-            )
-
-            if nid is None:
-                nid = await conn.fetchval(
-                    """
-                    INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
-                                    i_mtime, i_ctime, i_crtime)
-                    VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
-                    RETURNING id
-                    """,
-                    user_id,
-                    comp,
-                    parent_id,
-                    now
-                )
-                await create_closure(conn, nid, parent_id)
-            parent_id = nid
-        
-        node_id = await conn.fetchval(
-            """
-            SELECT id FROM nodes
-            WHERE user_id=$1 AND parent_id=$2 AND name=$3
-            """,
-            user_id,
-            parent_id,
-            filename
-        )
-
-        if node_id is None:
-            node_id = await conn.fetchval(
-                """
-                INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
-                                i_mtime, i_ctime, i_crtime)
-                VALUES($1,$2,$3, 1 ,$4,$4,$4,$4)
-                RETURNING id
-                """,
-                user_id,
-                filename,
-                parent_id,
-                now
-            )
-            await create_closure(conn, node_id, parent_id)
-
+    try:
+        chunk = int(request.args.get("chunk", ""))
+    except ValueError:
+        abort(400, "Invalid chunk index")
+    
+    data = await request.get_data()
+    if not data:
+        abort(400, "No data")
 
     tmp = tempfile.NamedTemporaryFile(delete=False)
-    await f.save(tmp.name)
+    tmp.write(data)
+    tmp.flush()
+    tmp.close()
 
     chunk_size = os.path.getsize(tmp.name)
 
-    asyncio.create_task(
-        dispatch_upload(POOL, discord_client, user_id, file_path, chunk,
-                        chunk_size, tmp.name)
-    )
-    return "", 202
+    try:
+        await dispatch_upload(
+            POOL, discord_client,
+            user_id, file_path,
+            chunk, chunk_size,
+            tmp.name
+        )
+    except Exception:
+        app.logger.exception("dispatch_upload failed")
+        abort(500, "Upload failed")
+
+    return "", 201
 
 
 
@@ -381,7 +337,7 @@ async def download():
             yield chunk
 
     # stream the file over in waves of chunks
-    return Response(streamer(), status=200, mimetype="application/octet-stream")
+    return Response(streamer(), status=201, mimetype="application/octet-stream")
 
 
 
@@ -448,19 +404,19 @@ async def create_file():
             user_id, file_name, parent, now)
         await create_closure(conn, nid, parent)
 
-    return "", 200
+    return "", 201
 
 
 
 @app.route("/ping", methods=["GET"])
 async def ping():
     print("Recieved ping, returning pong!");
-    return "pong\n", 200
+    return "pong\n", 201
 
 @app.route("/dog_gif", methods=["POST"])
 async def dog_gif_http():
     await discord_client.send_dog_gif()
-    return "", 200
+    return "", 201
 
 
 

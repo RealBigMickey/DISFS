@@ -50,3 +50,8 @@ local_path -> ACTUAL path on local filesystem
 
 
 file cache stored at -> HOME/.cache/disfs/{user_id}/{local_path}
+
+```bash
+# Delete all rows from sql quick and simple
+psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTART IDENTITY CASCADE;"
+```

@@ -9,6 +9,8 @@
 #include <cjson/cJSON.h>
 #include "fuse_utils.h"
 
+#include "debug.h"
+
 #define SERVER_IP "127.0.0.1:5050"
 static int current_user_id;
 static char current_username[32];
@@ -180,6 +182,7 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int do_read(const char *path, char *buf, size_t size, off_t offset,
                    struct fuse_file_info *fi)
 {
+    LOGMSG("IN read");
     // handle commands
     if (path[1] == '.') {
         if (!logged_in && 
@@ -200,6 +203,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     memcpy(current_username, name, sizeof(name)-1);
                     logged_in = 1;
                     free(resp.ptr);
+                    LOGMSG("logged in now! :D");
                     return snprintf(buf, size, "Logged in as \"%s\"\n", name);
                 }
             } else {
@@ -227,15 +231,16 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
     }
 
     // do_open and stored fd in fi->fh
-    ssize_t n = pread((int)fi->fh, buf, size, offset);
-    if (n < 0)
+    ssize_t written = pread((int)fi->fh, buf, size, offset);
+    if (written < 0)
         return -errno;
-    return (int)n;
+    return (int)written;
 }
 
 
 static int do_mkdir(const char *path, mode_t mode)
 {
+    LOGMSG("IN mkdir");
     if (!logged_in)
         return -EACCES;
     char url[URL_MAX];
@@ -272,6 +277,7 @@ static int do_mkdir(const char *path, mode_t mode)
 
 static int do_open(const char *path, struct fuse_file_info *fi)
 {
+    LOGMSG("IN open");
     if (!logged_in && strncmp(path, CSTR_LEN("/.ping/")) == 0)
         return 0;
 
@@ -283,9 +289,19 @@ static int do_open(const char *path, struct fuse_file_info *fi)
     snprintf(cache_path, sizeof(cache_path),
              "%s/.cache/disfs%s", getenv("HOME"), path);
 
-    /* remove stale cache (If it's even there) */
-    unlink(cache_path);
+    
+    /* If cached by create or previous open, should be fine */
+    if (access(cache_path, F_OK) == 0) {
+        int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+        int fd = open(cache_path, flags);
+        if (fd < 0)
+            return -errno;
+        fi->fh = fd;
+        return 0;
+    }
 
+
+    // Download from server otherwise
     char *dup = strdup(cache_path);
     char *dir = dirname(dup);
     mkdir_p(dir);
@@ -308,7 +324,8 @@ static int do_open(const char *path, struct fuse_file_info *fi)
     fclose(fp);
 
     /* stash fd in fi->fh */
-    int fd = open(cache_path, O_RDONLY);
+    int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+    int fd = open(cache_path, flags);
     if (fd < 0) {
         unlink(cache_path);
         return -errno;
@@ -320,7 +337,17 @@ static int do_open(const char *path, struct fuse_file_info *fi)
 
 static int do_release(const char *path, struct fuse_file_info *fi)
 {
+    LOGMSG("IN release");
+
+    fsync((int)fi->fh);
     close((int)fi->fh);
+
+    if (path[1] == '.')
+        return 0;
+
+    if ((fi->flags & O_ACCMODE) == O_RDONLY)
+        return 0;
+
 
     char cache_path[PATH_MAX];
     snprintf(cache_path, sizeof(cache_path),
@@ -328,7 +355,8 @@ static int do_release(const char *path, struct fuse_file_info *fi)
 
     FILE *fp = fopen(cache_path, "rb");
     if (!fp)
-        return -errno;
+        return -EIO;
+        
     
     void *chunk_buf = malloc(CHUNK_SIZE);
     if (!chunk_buf){
@@ -341,6 +369,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
     int chunk = 0;
     size_t n;
     while ((n = fread(chunk_buf, 1, CHUNK_SIZE, fp)) > 0) {
+        LOGMSG("We CHUNKIN'");
         char url[URL_MAX];
         snprintf(url, sizeof(url),
                 "http://" SERVER_IP "/upload?user_id=%d&path=%s&chunk=%d",
@@ -349,9 +378,14 @@ static int do_release(const char *path, struct fuse_file_info *fi)
         uint32_t status;
         if (http_post_stream(url, chunk_buf, n, &status) != 0)
             returner = -ECOMM;
+
+        LOGMSG("RELEASE STATUS: %d", status);
         
-        if (status != 200)
+        if (status != 201) {
             returner = -EIO;
+            break;
+        }
+
 
         chunk++;
     }
@@ -362,11 +396,14 @@ static int do_release(const char *path, struct fuse_file_info *fi)
         if (unlink(cache_path) != 0)
             returner = -errno;
 
+
+    LOGMSG("leaving release (%d)", returner);
     return returner;
 }
 
 static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
+    LOGMSG("IN CREATE path=%s mode=0%o fi->flags=0x%lx", path, mode, (unsigned long)fi->flags);
     if (!logged_in)
         return -EACCES;
     
@@ -374,18 +411,18 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     uint32_t status;
     uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
 
-    
     char url[URL_MAX];
     snprintf(url, sizeof(url),
              "http://" SERVER_IP "/create?user_id=%d&path=%s",
              current_user_id, path);
 
-
     if (http_get(url, NULL, status_ptr) != 0)
         return -ECOMM;
-    
-    if (status != 520)
+    LOGMSG("CREATE STATUS: %d", status);
+    if(status == 400)
         return -EEXIST;
+    if (status != 201)
+        return -EIO;
     
 
     char cache_path[PATH_MAX];
@@ -402,9 +439,23 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         return -errno;
     
     fi->fh = fd;
+    LOGMSG("leaving create");
     return 0;
 }
 
+
+static int do_write(const char *path, const char *buf,
+                    size_t size, off_t offset,
+                    struct fuse_file_info *fi)
+{
+    LOGMSG("IN write");
+    if (!logged_in || path[1] == '.')
+        return -EACCES;
+
+    ssize_t written = pwrite((int)fi->fh, buf, size, offset);
+
+    return written < 0 ? -errno : (int)written ;
+}
 
 
 
@@ -416,7 +467,8 @@ static struct fuse_operations ops = {
     .mkdir = do_mkdir,
     .open = do_open,
     .release = do_release,
-    .create = do_create
+    .create = do_create,
+    .write = do_write
 };
 
 int main(int argc, char *argv[])

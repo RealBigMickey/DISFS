@@ -54,9 +54,12 @@ async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, 
             )
             if nid is None:
                 # path should've been added by `/upload`
-                return
+                raise RuntimeError(f"Path not found in nodes: {file_path}")
             parent = nid
         node_id = nid
+
+
+    print(f"dispatch_upload: node_id={node_id}, chunk={chunk}, size={chunk_size}")
 
     # Send to discord
     channel = discord_client.get_channel(discord_client.channel_id)
@@ -68,14 +71,15 @@ async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, 
             """
             INSERT INTO file_chunks(node_id, chunk_index, chunk_size, message_id)
             VALUES($1,$2,$3,$4)
+            ON CONFLICT (node_id, chunk_index) DO NOTHING
             """,
-            node_id, chunk, chunk, msg.id
+            node_id, chunk, chunk_size, msg.id
         )
 
         # update access time
         await conn.execute(
             "UPDATE nodes SET i_mtime=$1 WHERE id=$2",
-            int(time.time(), node_id)
+            int(time.time()), node_id
         )
 
 
