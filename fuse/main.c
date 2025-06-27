@@ -458,6 +458,43 @@ static int do_write(const char *path, const char *buf,
 }
 
 
+static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
+{
+    // Using %jd and casting to intmax_t makes sure the numbers are consistant across platforms
+    LOGMSG("IN TRUNCATE path=%s, &size=%jd", path, (intmax_t)size);
+    if (!logged_in)
+        return -EACCES;
+
+    
+    uint32_t status;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://" SERVER_IP "/truncate?user_id=%d&path=%s&size=%jd",
+            current_user_id, path, (intmax_t)size);
+    
+    if (http_get(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+
+    LOGMSG("TRUNCATE STATUS: %d", status);
+    if(status == 400)
+        return -EEXIST;
+    if (status != 201)
+        return -EIO;
+    
+    /* Truncate local cache file */
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+             "%s/.cache/disfs%s", getenv("HOME"), path);
+    
+    if (truncate(cache_path, size) < 0)
+        return -errno;
+    
+    return 0;
+}
+
+
 
 
 static struct fuse_operations ops = {
@@ -468,7 +505,8 @@ static struct fuse_operations ops = {
     .open = do_open,
     .release = do_release,
     .create = do_create,
-    .write = do_write
+    .write = do_write,
+    .truncate = do_truncate
 };
 
 int main(int argc, char *argv[])

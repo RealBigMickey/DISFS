@@ -17,6 +17,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from dummySQL import seed_dummy_data, seed_foo_txt
 
 
+# Note: abort() returned error messages are ignored for now
+
 app = Quart(__name__)
 discord_client = get_client(NOTIFICATIONS_ID)
 POOL: asyncpg.Pool  # Similiar to declaring the type of variable POOL
@@ -406,6 +408,48 @@ async def create_file():
 
     return "", 201
 
+
+@app.route("/truncate", methods=["POST"])
+async def truncate_file():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    size = request.args.get("size")
+    if not raw_path or size is None:
+        abort(400, "Missing path or size")
+    size = int(size)
+
+    async with POOL.acquire() as conn, conn.transaction():
+        parent = await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id)
+        
+        parts = raw_path.split("/");
+        for comp in parts:
+            parent = await conn.fetchval(""
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+            user_id, parent, comp)
+            if parent is None:
+                abort(404)
+        node_id = parent
+
+        rows = await conn.fetch(
+                "SELECT message_id FROM file_chunks WHERE node_id=$1",
+                node_id)
+        channel = discord_client.get_channel(discord_client.channel_id)
+
+        for r in rows:
+            try:
+                msg = await channel.fetch_message(r["message_id"])
+                await msg.delete()
+            except Exception:
+                app.logger.exception(f"failed to delete chunk msg: {msg.id}")
+        
+        await conn.execute("DELETE FROM file_chunks WHERE node_id=$1", node_id)
+
+        await conn.execute("UPDATE nodes SET i_mtime=$1 WHERE id=$2",
+                            int(time.time()), node_id)
+        
+    return "", 201
 
 
 @app.route("/ping", methods=["GET"])

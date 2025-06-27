@@ -35,13 +35,11 @@ int http_get(const char *url, string_buf_t *resp, uint32_t *status) {
         return -1;
 
     curl_easy_setopt(c, CURLOPT_URL, url);
-    curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);  // failure on > 400
 
     if ((uintptr_t)status & 1) {
         curl_easy_setopt(c, CURLOPT_POST, 1L);  // make it POST
         status = (uint32_t*)((uintptr_t)status & ~1);
     }
-        
 
 
     if (resp) {
