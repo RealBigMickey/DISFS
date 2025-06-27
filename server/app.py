@@ -464,6 +464,70 @@ async def rmdir():
 
 
 
+@app.route("/rename", methods=["POST"])
+async def rename_file():
+    user_id  = await validate_user(POOL)
+    old_raw  = request.args.get("old", "").lstrip("/")
+    new_raw  = request.args.get("new", "").lstrip("/")
+
+    if not old_raw or not new_raw:
+        abort(400, "Missing old or new path")
+
+    parts = new_raw.split("/")
+    new_name = parts.pop()
+    parent_raw = "/".join(parts)   # "" is root
+
+    async with POOL.acquire() as conn, conn.transaction():
+        node_id = await resolve_node(conn, user_id, old_raw)
+        if node_id is None:
+            return "", 520
+
+        parent_id = await resolve_node(conn, user_id, parent_raw, expected_type=2)
+        if parent_id is None:
+            return "", 520
+
+        exists = await conn.fetchval(
+            "SELECT 1 FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+            user_id, parent_id, new_name)
+        if exists:
+            abort(409, "Destination exists")
+
+
+        await conn.execute(
+            "UPDATE nodes "
+            "   SET parent_id=$1, name=$2, i_mtime=$3 "
+            " WHERE id=$4",
+            parent_id, new_name, int(time.time()), node_id)
+
+        await conn.execute(
+            """
+            DELETE FROM node_closure
+             WHERE descendant IN (
+               SELECT descendant FROM node_closure WHERE ancestor=$1
+             )
+               AND ancestor IN (
+               SELECT ancestor   FROM node_closure WHERE descendant=$1
+                 AND ancestor!=$1
+             )
+            """,
+            node_id)
+
+
+        await conn.execute(
+            """
+            INSERT INTO node_closure (ancestor, descendant, depth)
+            SELECT super.ancestor, sub.descendant, super.depth + sub.depth + 1
+              FROM node_closure AS super
+              JOIN node_closure AS sub
+                ON super.descendant = $1    -- new parent
+               AND sub.ancestor   = $2      -- moved node
+            """,
+            parent_id, node_id)
+
+    return "", 201
+
+
+
 
 @app.route("/ping", methods=["GET"])
 async def ping():

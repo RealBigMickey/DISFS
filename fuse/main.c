@@ -7,8 +7,9 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <cjson/cJSON.h>
-#include "fuse_utils.h"
+#include <linux/fs.h>
 
+#include "fuse_utils.h"
 #include "debug.h"
 
 #define SERVER_IP "127.0.0.1:5050"
@@ -62,8 +63,8 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         "http://" SERVER_IP "/stat?user_id=%d&path=%s",
         current_user_id, path);
     
-    string_buf_t resp;
-    uint32_t status;
+    string_buf_t resp = {0};
+    uint32_t status = 0;
     int rc = http_get(url, &resp, &status);
 
     if (status == 520) {
@@ -158,7 +159,7 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         snprintf(url,sizeof(url),
                     "http://"SERVER_IP"/listdir?user_id=%d&path=%s",
                      current_user_id, path);
-        string_buf_t resp;
+        string_buf_t resp = {0};
         if (http_get(url, &resp, NULL) == 0) {
             cJSON *array = cJSON_Parse(resp.ptr);
             free(resp.ptr);
@@ -193,7 +194,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
               "http://" SERVER_IP "/login?user=%s", username);
 
               
-            string_buf_t resp;
+            string_buf_t resp = {0};
             if (http_get(url, &resp, NULL) == 0) {
                 int id;
                 char name[32];
@@ -375,7 +376,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
                 "http://" SERVER_IP "/upload?user_id=%d&path=%s&chunk=%d",
                 current_user_id, path, chunk);
 
-        uint32_t status;
+        uint32_t status = 0;
         if (http_post_stream(url, chunk_buf, n, &status) != 0)
             returner = -ECOMM;
 
@@ -408,7 +409,7 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         return -EACCES;
     
 
-    uint32_t status;
+    uint32_t status = 0;
     uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
 
     char url[URL_MAX];
@@ -466,7 +467,7 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
         return -EACCES;
 
     
-    uint32_t status;
+    uint32_t status = 0;
     uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
 
     char url[URL_MAX];
@@ -499,7 +500,7 @@ static int do_unlink(const char *path)
     if (!logged_in)
         return -EACCES;
     
-    uint32_t status;
+    uint32_t status = 0;
     uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
     char url[URL_MAX];
     snprintf(url, sizeof(url),
@@ -528,7 +529,7 @@ static int do_rmdir(const char *path)
     if (!logged_in)
         return -EACCES;
     
-    uint32_t status;
+    uint32_t status = 0;
     uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
     char url[URL_MAX];
     snprintf(url, sizeof(url),
@@ -552,6 +553,65 @@ static int do_rmdir(const char *path)
 }
 
 
+static int do_rename(const char *from_path,
+                     const char *to_path,
+                     unsigned int flags)
+{
+    if (!logged_in)
+        return -EACCES;
+
+    if (flags & RENAME_NOREPLACE) {
+        char url[URL_MAX];
+        snprintf(url, sizeof(url),
+                 "http://" SERVER_IP "/stat?user_id=%d&path=%s",
+                 current_user_id, to_path);
+
+        uint32_t status = 0;
+        if (http_get(url, NULL, &status) != 0)
+            return -ECOMM;
+
+        if (status != 520)
+            return -EEXIST;
+    }
+
+
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+             "http://" SERVER_IP "/rename?"
+             "user_id=%d&old=%s&new=%s",
+             current_user_id, from_path, to_path);
+
+    uint32_t status = 0;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+
+    if (http_get(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+
+    if (status == 520)
+        return -ENOENT;
+    if (status == 409)
+        return -EEXIST;
+    if (status != 201)
+        return -EIO;
+
+
+    char oldc[PATH_MAX], newc[PATH_MAX];
+    snprintf(oldc, sizeof(oldc),
+             "%s/.cache/disfs%s", getenv("HOME"), from_path);
+    snprintf(newc, sizeof(newc),
+             "%s/.cache/disfs%s", getenv("HOME"), to_path);
+
+
+    char *dup = strdup(newc);
+    mkdir_p(dirname(dup));
+    free(dup);
+
+    if (rename(oldc, newc) < 0)
+        return -errno;
+
+    return 0;
+}
+
 
 static struct fuse_operations ops = {
     .getattr = do_getattr,
@@ -565,6 +625,7 @@ static struct fuse_operations ops = {
     .truncate = do_truncate,
     .unlink = do_unlink,
     .rmdir = do_rmdir,
+    .rename = do_rename,
 };
 
 int main(int argc, char *argv[])
