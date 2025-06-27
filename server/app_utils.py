@@ -56,7 +56,7 @@ async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, 
                 # path should've been added by `/upload`
                 raise RuntimeError(f"Path not found in nodes: {file_path}")
             parent = nid
-        node_id = nid
+        node_id = parent
 
 
     print(f"dispatch_upload: node_id={node_id}, chunk={chunk}, size={chunk_size}")
@@ -157,19 +157,22 @@ async def resolve_node(conn, user_id: int, path: str, expected_type: int | None 
 
     if parent_id is None:
         return None
-
-    for comp in parts:
-        node_id = await conn.fetchval(
+    n_parts = len(parts)
+    for idx, comp in enumerate(parts):
+        row = await conn.fetchrow(
             "SELECT id, type FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-            user_id, parent_id, comp)
-        if node_id is None:
+            user_id, parent_id, comp
+        )
+        if not row:
+            return None
+        node_id, n_type = row["id"], row["type"]
+
+        # intermediate must be directories
+        if idx < n_parts - 1 and n_type != 2:
             return None
 
-        if expected_type is not None:
-            n_type = await conn.fetchval(
-                "SELECT type FROM nodes WHERE id=$1", node_id)
-            if n_type != expected_type:
-                return None
-    
+        if idx == n_parts - 1 and expected_type is not None and n_type != expected_type:
+            return None
+
         parent_id = node_id
     return parent_id

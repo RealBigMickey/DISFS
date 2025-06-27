@@ -1,6 +1,7 @@
 #include "fuse_utils.h"
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #define NO_LSLASH(x) (*x == '/' ? x+1 : x)
 
@@ -52,10 +53,10 @@ int http_get(const char *url, string_buf_t *resp, uint32_t *status) {
     }
 
     CURLcode rc = curl_easy_perform(c);
-    curl_easy_cleanup(c);
 
     if (status)
-            curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
+        curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, status);
+    curl_easy_cleanup(c);
     return (rc == CURLE_OK) ? 0 : -1;
 }
 
@@ -121,6 +122,18 @@ void mkdir_p(const char *dir) {
     mkdir(tmp, 0755);
 }
 
+
+char *url_encode(const char* path)
+{
+    CURL *c = curl_easy_init();
+    if (!c)
+        return NULL;
+
+    char *esc = curl_easy_escape(c, path, 0);
+    curl_easy_cleanup(c);
+
+    return esc;
+}
 
 
 

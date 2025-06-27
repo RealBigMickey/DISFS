@@ -26,5 +26,5 @@ int http_get(const char *url, string_buf_t *resp, u_int32_t *status);
 int http_get_stream(const char *url, FILE *out);
 int http_post_stream(const char *url, const void *data, size_t len, uint32_t *status);
 
-
+char *url_encode(const char* path);
 void mkdir_p(const char *dir);

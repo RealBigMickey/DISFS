@@ -3,7 +3,7 @@ import time
 import aioconsole
 import os
 from discord import File
-from quart import Quart, request, abort, jsonify, Response
+from quart import Quart, request, jsonify, Response
 from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS
 from server.discord_api import get_client
 import asyncpg
@@ -17,7 +17,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from dummySQL import seed_dummy_data, seed_foo_txt
 
 
-# Note: abort() returned error messages are ignored for now
+# Note: http return error messages are ignored for now
 
 app = Quart(__name__)
 discord_client = get_client(NOTIFICATIONS_ID)
@@ -49,8 +49,7 @@ async def startup():
             "William"
         )
 
-    await seed_dummy_data(POOL)
-    await seed_foo_txt(POOL)
+    await seed_foo_txt(POOL)  # For testing
     asyncio.create_task(discord_client.start(TOKEN))
     asyncio.create_task(admin_console(discord_client, app))
     discord_client.channel_id = VAULT_IDS[0]
@@ -58,24 +57,48 @@ async def startup():
 
 def require_login():
     if CURRENT_USER_ID is None:
-        abort(401, "Not logged in")
+        return "Not logged in", 401
+
+@app.route("/register", methods=["GET"])
+async def register():
+    username = request.args.get("user", "").strip()
+    if not username:
+        return "", 404
+
+    async with POOL.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (username)
+            VALUES ($1)
+            ON CONFLICT (username) DO NOTHING;
+            """,
+            username
+        )
+
+        row = await conn.fetchrow(
+            "SELECT id FROM users WHERE username=$1", username
+        )
+
+        if row is None:
+            return "", 404
+        return f"{row['id']}:{username}\n", 201, {"Content-Type": "text/plain"}
 
 
 # Usage: GET /login?user=John, Returns: { "user_id": 42, "username": "John" }
 @app.route("/login", methods=["GET"])
 async def login():
-    user = request.args.get("user", "").strip()
-    if not user:
+    username = request.args.get("user", "").strip()
+    if not username:
         return "", 404
 
     async with POOL.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id FROM users WHERE username=$1", user
+            "SELECT id FROM users WHERE username=$1", username
         )
     if row is None:
         return "", 404
     
-    return f"{row['id']}:{user}\n", 201, {"Content-Type": "text/plain"}
+    return f"{row['id']}:{username}\n", 201, {"Content-Type": "text/plain"}
 
 
 
@@ -90,16 +113,16 @@ async def upload():
 
     file_path = request.args.get("path", "").lstrip("/")
     if not file_path:
-        abort(400, "Missing path")
+        return "Missing path", 400
 
     try:
         chunk = int(request.args.get("chunk", ""))
     except ValueError:
-        abort(400, "Invalid chunk index")
+        return "Invalid chunk index", 400
     
     data = await request.get_data()
     if not data:
-        abort(400, "No data")
+        return "No data", 400
 
     tmp = tempfile.NamedTemporaryFile(delete=False)
     tmp.write(data)
@@ -117,7 +140,7 @@ async def upload():
         )
     except Exception:
         app.logger.exception("dispatch_upload failed")
-        abort(500, "Upload failed")
+        return "Upload failed", 500
 
     return "", 201
 
@@ -161,7 +184,7 @@ async def stat():
             """, node_id)
             result["size"] = size
 
-    return jsonify(result)
+    return jsonify(result), 201
 
 
 
@@ -184,7 +207,7 @@ async def listdir():
             user_id
         )
         if parent_id is None:
-            abort(404)
+            return "", 520
 
         if dir_path:
             for comp in dir_path.split("/"):
@@ -195,7 +218,7 @@ async def listdir():
                     user_id, parent_id, comp
                 )
                 if nid is None:
-                    abort(404)
+                    return "", 520
                 parent_id = nid
 
         rows = await conn.fetch(
@@ -220,64 +243,62 @@ async def listdir():
 @app.route("/mkdir", methods=["POST"])
 async def mkdir():
     user_id = await validate_user(POOL)
-    dir_path = request.args.get("path", "").lstrip("/")
+    raw_path = request.args.get("path", "").lstrip("/")
 
-    if dir_path == "":
+    if raw_path == "":
         return "", 404
     
-    parts = dir_path.split("/")
+
+    parts = raw_path.split("/")
+    if len(parts) == 2:
+        parent_raw = parts[0]
+    else:
+        parent_raw = "" 
+
+    filename = parts[-1]
+
+    now = int(time.time())
     async with POOL.acquire() as conn, conn.transaction():
-        parent_id = await conn.fetchval(
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
-            user_id
-        )
-        
-        if parent_id is None:
-            return 500
-        
-        now = int(time.time())
-        for i, comp in enumerate(parts):
-            node_id = await conn.fetchval(
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-            user_id,
-            parent_id,
-            comp
+        if parent_raw == "":
+            # empty path = root folder
+            parent_id = await conn.fetchval(
+                "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+                user_id
             )
+            if parent_id is None:
+                parent_id = await conn.fetchval(
+                    """
+                    INSERT INTO nodes(user_id, name, parent_id, type,
+                                      i_atime, i_mtime, i_ctime, i_crtime)
+                    VALUES ($1, '', NULL, 2, $2, $2, $2, $2)
+                    RETURNING id
+                    """,
+                    user_id, now
+                )
+                await create_closure(conn, parent_id, None)
+        else:
+          parent_id = await resolve_node(conn, user_id, parent_raw, expected_type=2)
 
-            if node_id is None:
-                if i != len(parts) - 1:
-                    # Create missing intermediate directory
-                    node_id = await conn.fetchval(
-                        """
-                        INSERT INTO nodes(user_id, name, parent_id, type, i_atime,
-                                            i_mtime, i_ctime, i_crtime)
-                        VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
-                        RETURNING id
-                        """,
-                        user_id,
-                        comp,
-                        parent_id,
-                        now
-                    )
-                    await create_closure(conn, node_id, parent_id)
+        if parent_id is None:
+            return "", 404
 
-                else:
-                    # Create ACTUAL directory
-                    node_id = await conn.fetchval(
-                        """
-                        INSERT INTO nodes(user_id, name, parent_id, type,
-                                        i_atime, i_mtime, i_ctime, i_crtime)
-                        VALUES($1,$2,$3, 2 ,$4,$4,$4,$4)
-                        RETURNING id
-                        """,
-                        user_id,
-                        comp,
-                        parent_id,
-                        now
-                    )
-                    await create_closure(conn, node_id, parent_id)
-            parent_id = node_id
-        
+        exists = await conn.fetchval(
+            "SELECT 1 FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND type=2",
+            user_id, parent_id, filename)
+        if exists:
+            return "", 201
+
+        node_id = await conn.fetchval(
+            """
+            INSERT INTO nodes(user_id, name, parent_id, type,
+                              i_atime, i_mtime, i_ctime, i_crtime)
+            VALUES ($1,$2,$3, 2, $4,$4,$4,$4)
+            RETURNING id
+            """,
+            user_id, filename, parent_id, now
+        )
+        await create_closure(conn, node_id, parent_id)
+
     return "", 201
 
 @app.route("/download", methods=["GET"])
@@ -285,7 +306,7 @@ async def download():
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path", "").lstrip("/")
     if not raw_path:
-        abort(400)
+        return "", 400
 
     async with POOL.acquire() as conn:
         node_id = await resolve_node(conn, user_id, raw_path, 1)
@@ -301,7 +322,7 @@ async def download():
             node_id
         )
         if not rows:
-            abort(500, "no chunks")
+            return "no chunks", 500
 
     async def streamer():
         for r in rows:
@@ -319,7 +340,7 @@ async def create_file():
     raw_path = request.args.get("path", "").lstrip("/");
 
     if not raw_path:
-        abort(400)
+        return "", 400
     
     parts = raw_path.split("/")
     file_name = parts.pop()
@@ -363,7 +384,7 @@ async def create_file():
             user_id, parent, file_name
         )
         if check_exists:
-            abort(420)
+            return "", 420
         
 
         node_id = await conn.fetchval(
@@ -385,7 +406,7 @@ async def truncate_file():
     raw_path = request.args.get("path", "").lstrip("/")
     size = request.args.get("size")
     if not raw_path or size is None:
-        abort(400, "Missing path or size")
+        return "Missing path or size", 400
     size = int(size)
 
     async with POOL.acquire() as conn, conn.transaction():
@@ -457,7 +478,7 @@ async def rmdir():
             "SELECT 1 FROM nodes WHERE parent_id=$1 LIMIT 1", dir_id
         )
         if child:
-            abort(404)
+            return "", 404
 
         await conn.execute("DELETE FROM nodes WHERE id=$1", dir_id)
     return '', 201
@@ -471,7 +492,7 @@ async def rename_file():
     new_raw  = request.args.get("new", "").lstrip("/")
 
     if not old_raw or not new_raw:
-        abort(400, "Missing old or new path")
+        return "Missing old or new path", 400
 
     parts = new_raw.split("/")
     new_name = parts.pop()
@@ -490,7 +511,7 @@ async def rename_file():
             "SELECT 1 FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
             user_id, parent_id, new_name)
         if exists:
-            abort(409, "Destination exists")
+            return "Destination exists", 409
 
 
         await conn.execute(
