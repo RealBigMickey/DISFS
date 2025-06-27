@@ -9,7 +9,7 @@ from server.discord_api import get_client
 import asyncpg
 import tempfile
 
-from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure
+from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure, resolve_node
 
 
 import sys
@@ -134,23 +134,10 @@ async def stat():
     
     parts = raw_path.split("/")
     async with POOL.acquire() as conn:
-        parent_id = await conn.fetchval(
-            """
-            SELECT id FROM nodes
-            WHERE user_id=$1 AND parent_id IS NULL
-            """, user_id)
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=None)
 
-        node_id = None
-        for item in parts:
-            node_id = await conn.fetchval(
-                """
-                SELECT id FROM nodes
-                WHERE user_id=$1 AND parent_id=$2 AND name=$3
-                """, user_id, parent_id, item)
-            if node_id is None:
-                return "", 520  # 520 means not found
-            else:
-                parent_id = node_id
+        if node_id is None:
+            return "", 520
 
         node_row = await conn.fetchrow(
             """
@@ -227,7 +214,7 @@ async def listdir():
         entry = {"name": r["name"], "type": r["type"], "mtime": r["i_mtime"]}
         result.append(entry)
 
-    return jsonify(result)
+    return jsonify(result), 201
 
 
 @app.route("/mkdir", methods=["POST"])
@@ -300,25 +287,8 @@ async def download():
     if not raw_path:
         abort(400)
 
-    parts = raw_path.split("/")
     async with POOL.acquire() as conn:
-        parent_id = await conn.fetchval(
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
-            user_id
-        )
-        node_id = None
-        for comp in parts:
-            node_id = await conn.fetchval(
-                "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-                user_id, parent_id, comp
-            )
-            if node_id is None:
-                abort(404)
-            parent_id = node_id
-        
-        typ = await conn.fetchval("SELECT type FROM nodes WHERE id=$1", node_id)
-        if typ != 1:
-            abort(400)
+        node_id = await resolve_node(conn, user_id, raw_path, 1)
 
         # Get chunks in order
         rows = await conn.fetch(
@@ -362,15 +332,15 @@ async def create_file():
         )
 
         for comp in parts:
-            nid = await conn.fetchval(
+            node_id = await conn.fetchval(
                 """
                 SELECT id FROM nodes
                 WHERE user_id=$1 AND parent_id=$2 AND name=$3
                 """,
                 user_id, parent, comp
             )
-            if nid is None:
-                nid = await conn.fetchval(
+            if node_id is None:
+                node_id = await conn.fetchval(
                     """
                     INSERT INTO nodes(user_id, name, parent_id, type,
                     i_atime, i_mtime, i_ctime, i_crtime)
@@ -379,8 +349,8 @@ async def create_file():
                     """,
                     user_id, comp, parent, now
                 )
-                await create_closure(conn, nid, parent)
-            parent = nid
+                await create_closure(conn, node_id, parent)
+            parent = node_id
 
 
 
@@ -396,7 +366,7 @@ async def create_file():
             abort(420)
         
 
-        nid = await conn.fetchval(
+        node_id = await conn.fetchval(
             """
             INSERT INTO nodes(user_id, name, parent_id, type,
             i_atime, i_mtime, i_ctime, i_crtime)
@@ -404,7 +374,7 @@ async def create_file():
             RETURNING id
             """,
             user_id, file_name, parent, now)
-        await create_closure(conn, nid, parent)
+        await create_closure(conn, node_id, parent)
 
     return "", 201
 
@@ -419,18 +389,7 @@ async def truncate_file():
     size = int(size)
 
     async with POOL.acquire() as conn, conn.transaction():
-        parent = await conn.fetchval(
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
-            user_id)
-        
-        parts = raw_path.split("/");
-        for comp in parts:
-            parent = await conn.fetchval(""
-            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-            user_id, parent, comp)
-            if parent is None:
-                abort(404)
-        node_id = parent
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
 
         rows = await conn.fetch(
                 "SELECT message_id FROM file_chunks WHERE node_id=$1",
@@ -450,6 +409,60 @@ async def truncate_file():
                             int(time.time()), node_id)
         
     return "", 201
+
+
+@app.route("/unlink", methods=["POST"])
+async def unlink():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path")
+
+    async with POOL.acquire() as conn:
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
+
+        if not node_id:
+            return "", 520
+        
+        rows = await conn.fetch(
+            "SELECT message_id FROM file_chunks WHERE node_id=$1",
+              node_id)
+        channel = discord_client.get_channel(discord_client.channel_id)
+
+        for r in rows:
+            try:
+                msg = await channel.fetch_message(r["message_id"])
+                await msg.delete()
+            except Exception:
+                app.logger.exception(
+                    f"failed to delete chunk on discord, raw_path from fuse:{raw_path}")
+
+        await conn.execute(
+            "DELETE FROM nodes WHERE id=$1", node_id
+        )
+    return '', 201
+
+
+@app.route("/rmdir", methods=["POST"])
+async def rmdir():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path")
+
+    async with POOL.acquire() as conn:
+        # ensure dir is empty
+        dir_id = await resolve_node(conn, user_id, raw_path, expected_type=2)
+
+        if not dir_id:
+            return "", 520
+    
+        child = await conn.fetchval(
+            "SELECT 1 FROM nodes WHERE parent_id=$1 LIMIT 1", dir_id
+        )
+        if child:
+            abort(404)
+
+        await conn.execute("DELETE FROM nodes WHERE id=$1", dir_id)
+    return '', 201
+
+
 
 
 @app.route("/ping", methods=["GET"])

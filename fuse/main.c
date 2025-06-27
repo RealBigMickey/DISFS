@@ -494,6 +494,62 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
     return 0;
 }
 
+static int do_unlink(const char *path)
+{
+    if (!logged_in)
+        return -EACCES;
+    
+    uint32_t status;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://" SERVER_IP "/unlink?user_id=%d&path=%s",
+            current_user_id, path);
+
+    if (http_get(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+    
+    if (status != 201) {
+        LOGMSG("unlink error: returned %d for path \"%s\"", status, path);
+        return -ENOENT;
+    }
+
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+            "%s./cache/disfs%s", getenv("HOME"), path);
+    unlink(cache_path);
+
+    return 0;
+}
+
+
+static int do_rmdir(const char *path)
+{
+    if (!logged_in)
+        return -EACCES;
+    
+    uint32_t status;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://" SERVER_IP "/rmdir?user_id=%d&path=%s",
+            current_user_id, path);
+
+    if (http_get(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+    
+    if (status != 201) {
+        LOGMSG("rmdir error: returned %d for path \"%s\"", status, path);
+        return -ENOENT;
+    }
+
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),
+            "%s./cache/disfs%s", getenv("HOME"), path);
+    rmdir(cache_path);
+
+    return 0;
+}
 
 
 
@@ -506,7 +562,9 @@ static struct fuse_operations ops = {
     .release = do_release,
     .create = do_create,
     .write = do_write,
-    .truncate = do_truncate
+    .truncate = do_truncate,
+    .unlink = do_unlink,
+    .rmdir = do_rmdir,
 };
 
 int main(int argc, char *argv[])

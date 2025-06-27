@@ -142,3 +142,34 @@ async def create_closure(conn, new_id: int, parent_id: int | None):
         """,
         [(r["ancestor"], new_id, r["depth"] + 1) for r in rows]
     )
+
+
+# type 1 -> file, type 2 -> directory
+async def resolve_node(conn, user_id: int, path: str, expected_type: int | None = None):
+
+    path = path.strip("/")
+    parts = [p for p in path.split("/") if p]  # skip empty components
+
+    node_id = None
+    parent_id = await conn.fetchval(
+        "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+        user_id)
+
+    if parent_id is None:
+        return None
+
+    for comp in parts:
+        node_id = await conn.fetchval(
+            "SELECT id, type FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+            user_id, parent_id, comp)
+        if node_id is None:
+            return None
+
+        if expected_type is not None:
+            n_type = await conn.fetchval(
+                "SELECT type FROM nodes WHERE id=$1", node_id)
+            if n_type != expected_type:
+                return None
+    
+        parent_id = node_id
+    return parent_id
