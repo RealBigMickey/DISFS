@@ -1,44 +1,98 @@
-# DisFS
-A distributed file system with a Python backend and FUSE-based C frontend.
+# DISFS – Discord Integrated Storage File System
 
-## 📦 Features
-- Chunked file uploads via Python API
-- Discord integration (uploads, notifications)
-- FUSE-based virtual filesystem in C
-- JSON handling with cJSON
-- Network requests with libcurl
-- blah blah blah... TBD.
+DISFS turns **Discord** into a backend object store that you can mount
+as a normal POSIX file system via **FUSE 3**.  
+Write a file → it’s chunked and uploaded as Discord attachments;  
+read a file → the daemon streams chunks back on-demand.
 
 ---
 
-## 🐍 Python Setup
+## Features
 
-Install Python dependencies with:
+|   | Feature                | Details                                                                                           |
+|---|------------------------|----------------------------------------------------------------------------------------------------|
+| ✓ | **Mount anywhere**     | `./main /mnt/disfs` – no kernel patches, runs on vanilla Linux 5.x                                 |
+| ✓ | **Smart metadata**     | Closure-table schema gives O(1) emptiness test and fast `rename`                                   |
+| ✓ | **Pseudo-file commands**| Login with `cat /.ping/William`, logout with `cat /.pong` – UNIX-style control surface            |
+| ✓ | **Fully async backend**| `asyncpg` + Discord websockets, no thread pools, high concurrency                                 |
+
+---
+
+## Quick-start (fuse side)
+#### 1) clone
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/RealBigMickey/DISFS
 ```
+cd disfs
 
----
+#### 2) C Dependencies
 
-## 🧱 C Dependencies
-
-The C side uses:
+FUSE side uses:
 
 - [`libfuse3`](https://github.com/libfuse/libfuse)
 - [`libcurl`](https://curl.se/libcurl/)
 - [`cJSON`](https://github.com/DaveGamble/cJSON)
 
-### Install on Debian/Ubuntu:
+#### 3) Install Debian/Ubuntu dependencies:
 
 ```bash
 sudo apt update
 sudo apt install libfuse3-dev libcurl4-openssl-dev libcjson-dev
 ```
 
+#### 4) Run make file at repo directory
+```bash
+make
+```
+Automatically builds + unmount + mounts.
+To unmount do `make unmount`, only mount with `make mount`
+
 ---
 
+## Quick-start (server side)
+#### 1) Python Setup
 
-**Note: uses ext4 format, thus is made for LINUX**
+Install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+#### 2) env vars 
+```bash
+echo 'DATABASE_URL="postgresql://user:pass@/disfs"
+TOKEN="YOUR_DISCORD_BOT_TOKEN"' > .env
+# Get bot token from: https://discord.com/developers/
+```
+
+#### 3) Manually set server/_config.py
+```python
+NOTIFICATIONS_ID = YOUR_NOTIFICATION_CHANNEL_ID
+VAULT_IDS = [YOUR_NOTIFICATION_CHANNEL_ID]  # Just 1 implemented right now
+```
+
+#### 4) run server (Quart, hot-reload off)
+```bash
+python -m server.main
+```
+Type `exit` to exit server.
+
+## Known limitations / TODO
+- No per-user encryption (planned AES-GCM chunk layer).
+
+- Single Discord channel; should shard by hash prefix.
+
+- Synchronous libcurl in server path – migrate to aiohttp for zero‐copy.
+
+- Directory listings are CSV hits; add pagination for >1 k entries.
+
+##  License
+MIT for demo code. Discord™ is a trademark of Discord Inc.; this project is neither affiliated with nor endorsed by them.
+
+
+---
+
+#### miscellaneous:
+
 type = 1 -> file
 type = 2 -> directory
 

@@ -176,3 +176,6 @@ async def resolve_node(conn, user_id: int, path: str, expected_type: int | None 
 
         parent_id = node_id
     return parent_id
+
+
+
