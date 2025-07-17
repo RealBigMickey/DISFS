@@ -8,6 +8,7 @@
 
 /* Used for debugging, will be removed. Eventually...... */
 #if DEBUG_MODE
+
 #define LOGMSG(...) do { \
     FILE *fp = fopen("/home/bigmickey/linux2025/Linux_Final/logs.txt", "a"); \
     if (fp) { \
@@ -16,8 +17,11 @@
         fclose(fp); \
     } \
 } while (0)
+
 #else
+
 #define LOGMSG(...) do { } while (0)
+
 #endif
 
 

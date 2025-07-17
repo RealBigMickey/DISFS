@@ -3,7 +3,6 @@
 #include <string.h>
 #include <errno.h>
 
-#define NO_LSLASH(x) (*x == '/' ? x+1 : x)
 
 // size = size of each member, nmemb = number of members
 size_t write_cb(void *data, size_t size, size_t nmemb, void *userp)
@@ -132,11 +131,18 @@ char *url_encode(const char* path)
     char *esc = curl_easy_escape(c, path, 0);
     curl_easy_cleanup(c);
 
+    /* Check against string buffer overflows */
+    size_t len = strnlen(esc, 512 + 1);
+    if (len > 512) {
+        curl_free(esc);
+        return NULL;
+    }
+
     return esc;
 }
 
 
-
+#define NO_LSLASH(x) (*x == '/' ? x+1 : x)
 void local_cache_path(char *dst, size_t dstsz,
                              const char *user_home,
                              const char *remote_path)

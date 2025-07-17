@@ -14,7 +14,6 @@ typedef struct string_buf {
     size_t len;
 } string_buf_t;
 
-
 size_t write_cb(void *data, size_t size, size_t nmemb, void *userp);
 
 void local_cache_path(char *dst, size_t dstsz,

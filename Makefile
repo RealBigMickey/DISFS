@@ -1,6 +1,6 @@
 
 TARGET = main
-SRCS = fuse/main.c fuse/fuse_utils.c
+SRCS = fuse/main.c fuse/fuse_utils.c fuse/server_config.c
 OBJS = $(SRCS:.c=.o)
 
 CC = gcc

@@ -10,9 +10,9 @@
 #include <linux/fs.h>
 
 #include "fuse_utils.h"
+#include "server_config.h"
 #include "debug.h"
 
-#define SERVER_IP "127.0.0.1:5050"
 static int current_user_id;
 static char current_username[32];
 static int logged_in;
@@ -39,10 +39,11 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         return 0;
     }
 
-    if (strncmp(path, "/.", 2) == 0) {
+    if (path[1] == '.') {
         if (strcmp(path, "/.doggo") == 0 ||
             strncmp(path, CSTR_LEN("/.ping/")) == 0 ||
             strncmp(path, CSTR_LEN("/.register/")) == 0 ||
+            strncmp(path, CSTR_LEN("/.serverip/")) == 0 ||
             strcmp(path, "/.pong") == 0) {
 
             st->st_mode = S_IFREG | 0644;
@@ -65,8 +66,8 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-        "http://" SERVER_IP "/stat?user_id=%d&path=%s",
-        current_user_id, esc);
+            "http://%s/stat?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
     
     string_buf_t resp = {0};
@@ -146,8 +147,9 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         } 
 
         // COMMANDS
-        if (strncmp(path, "/.", 2) == 0) {
+        if (path[1] == '.') {
             filler(buf, "COMMANDS: (prefix=.)", NULL, 0, 0);
+            filler(buf, "serverip (Set server ip, defaults to localhost)", NULL, 0, 0);
             filler(buf, "register (register & login)", NULL, 0, 0);
             filler(buf, "ping (login)", NULL, 0, 0);
             filler(buf, "pong (logout)", NULL, 0, 0);
@@ -169,8 +171,8 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     
     char url[URL_MAX];
     snprintf(url,sizeof(url),
-                "http://"SERVER_IP"/listdir?user_id=%d&path=%s",
-                    current_user_id, esc);
+            "http://%s/listdir?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     string_buf_t resp = {0};
@@ -203,14 +205,21 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
     LOGMSG("IN read");
     // handle commands
     if (path[1] == '.') {
-        if (!logged_in && 
+        if (strncmp(path, CSTR_LEN("/.serverip/")) == 0) {
+            const char *ip = path + sizeof("/.serverip/") - 1;
+            int ret = change_server_ip(ip);
+            if (ret == -1)
+                return snprintf(buf, size, "Invalid format! e.g. 192.168.0.1\n");
+            if (ret == 0)
+                return snprintf(buf, size, "Server ip set to %s\n", ip);
+        } else if (!logged_in && 
           strncmp(path, CSTR_LEN("/.register/")) == 0) {
             const char *username = path + sizeof("/.register/") - 1;
             
  
             char url[URL_MAX];
             snprintf(url, sizeof(url),
-              "http://" SERVER_IP "/register?user=%s", username);
+              "http://%s/register?user=%s", get_server_ip(), username);
               
             string_buf_t resp = {0};
             if (http_get(url, &resp, NULL) == 0) {
@@ -223,7 +232,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     logged_in = 1;
                     free(resp.ptr);
                     LOGMSG("Registered/logged in now! :D");
-                    return snprintf(buf, size, "Registered/Logged in as \"%s\"\n", name);
+                    return snprintf(buf, size, "Registered and Logged in as \"%s\"\n", name);
                 }
             } else {
                 return snprintf(buf, size, "Failed to login.\n");
@@ -236,7 +245,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
  
             char url[URL_MAX];
             snprintf(url, sizeof(url),
-              "http://" SERVER_IP "/login?user=%s", username);
+                "http://%s/login?user=%s", get_server_ip(), username);
               
             string_buf_t resp = {0};
             if (http_get(url, &resp, NULL) == 0) {
@@ -251,9 +260,10 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     LOGMSG("logged in now! :D");
                     return snprintf(buf, size, "Logged in as \"%s\"\n", name);
                 }
-            } else {
-                return snprintf(buf, size, "Failed to login.\n");
             }
+
+            free(resp.ptr);
+            return snprintf(buf, size, "Failed to login.\n");
         }
 
         if (logged_in && strncmp(path, CSTR_LEN("/.pong")) == 0) {
@@ -263,7 +273,9 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
         }
 
         if (strncmp(path, CSTR_LEN("/.doggo")) == 0) {
-            http_get("http://" SERVER_IP "/dog_gif", NULL, NULL);
+            char url[512];
+            snprintf(url, sizeof(url), "http://%s/dog_gif", get_server_ip());
+            http_get(url, NULL, NULL);
             return snprintf(buf, size, "Doggo gif sent to notification channel!\n");
         }
 
@@ -286,7 +298,7 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
 static int do_mkdir(const char *path, mode_t mode)
 {
     LOGMSG("IN mkdir");
-    if (!logged_in)
+    if (!logged_in || path[1] == '.')
         return -EACCES;
 
     char *esc = url_encode(path);
@@ -294,8 +306,8 @@ static int do_mkdir(const char *path, mode_t mode)
         return -EIO;
     
     char url[URL_MAX];
-    snprintf(url, sizeof(url), "http://" SERVER_IP "/mkdir?user_id=%d&path=%s",
-                current_user_id, esc);
+    snprintf(url, sizeof(url), "http://%s/mkdir?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     CURL *c = curl_easy_init();
@@ -323,13 +335,14 @@ static int do_mkdir(const char *path, mode_t mode)
 }
 
 
-
 static int do_open(const char *path, struct fuse_file_info *fi)
 {
     LOGMSG("IN open");
-    if (!logged_in) {
+    if (!logged_in || path[1] == '.') {
         if (strncmp(path, CSTR_LEN("/.ping/")) == 0 ||
-          strncmp(path, CSTR_LEN("/.register/")) == 0)
+            strncmp(path, CSTR_LEN("/.register/")) == 0 ||
+            strncmp(path, CSTR_LEN("/.serverip/")) == 0
+           )
             return 0;
         return -EACCES;
     }
@@ -364,8 +377,8 @@ static int do_open(const char *path, struct fuse_file_info *fi)
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-             "http://" SERVER_IP "/download?user_id=%d&path=%s",
-             current_user_id, esc);
+            "http://%s/download?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     FILE *fp = fopen(cache_path, "wb");
@@ -432,8 +445,8 @@ static int do_release(const char *path, struct fuse_file_info *fi)
 
         char url[URL_MAX];
         snprintf(url, sizeof(url),
-                "http://" SERVER_IP "/upload?user_id=%d&path=%s&chunk=%d",
-                current_user_id, esc, chunk);
+                "http://%s/upload?user_id=%d&path=%s&chunk=%d",
+                get_server_ip(), current_user_id, esc, chunk);
         curl_free(esc);
 
         uint32_t status = 0;
@@ -464,7 +477,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
 static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     LOGMSG("IN CREATE path=%s mode=0%o fi->flags=0x%lx", path, mode, (unsigned long)fi->flags);
-    if (!logged_in)
+    if (!logged_in || path[1] == '.')
         return -EACCES;
     
 
@@ -477,8 +490,8 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-             "http://" SERVER_IP "/create?user_id=%d&path=%s",
-             current_user_id, esc);
+            "http://%s/create?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     if (http_get(url, NULL, status_ptr) != 0)
@@ -539,8 +552,8 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://" SERVER_IP "/truncate?user_id=%d&path=%s&size=%jd",
-            current_user_id, esc, (intmax_t)size);
+            "http://%s/truncate?user_id=%d&path=%s&size=%jd",
+            get_server_ip(), current_user_id, esc, (intmax_t)size);
     curl_free(esc);
 
     if (http_get(url, NULL, status_ptr) != 0)
@@ -575,8 +588,8 @@ static int do_unlink(const char *path)
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://" SERVER_IP "/unlink?user_id=%d&path=%s",
-            current_user_id, esc);
+            "http://%s/unlink?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     if (http_get(url, NULL, status_ptr) != 0)
@@ -610,8 +623,8 @@ static int do_rmdir(const char *path)
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://" SERVER_IP "/rmdir?user_id=%d&path=%s",
-            current_user_id, esc);
+            "http://%s/rmdir?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
     curl_free(esc);
 
     if (http_get(url, NULL, status_ptr) != 0)
@@ -645,8 +658,8 @@ static int do_rename(const char *from_path,
 
         char url[URL_MAX];
         snprintf(url, sizeof(url),
-                 "http://" SERVER_IP "/stat?user_id=%d&path=%s",
-                 current_user_id, esc);
+                "http://%s/stat?user_id=%d&path=%s",
+                get_server_ip(), current_user_id, esc);
         curl_free(esc);
 
         uint32_t status = 0;
@@ -668,9 +681,8 @@ static int do_rename(const char *from_path,
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-             "http://" SERVER_IP "/rename?"
-             "user_id=%d&old=%s&new=%s",
-             current_user_id, esc_from, esc_to);
+            "http://%s/rename?user_id=%d&old=%s&new=%s",
+            get_server_ip(), current_user_id, esc_from, esc_to);
     curl_free(esc_to);
     curl_free(esc_from);
 

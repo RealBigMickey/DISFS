@@ -100,6 +100,9 @@ async def admin_console(discord_client, app):
             case "exit":
                 print("Shutting down...")
                 await app.shutdown()
+            case "quit":
+                print("Shutting down...")
+                await app.shutdown()
             case "q":
                 print("Shutting down...")
                 await app.shutdown()
