@@ -187,6 +187,33 @@ async def stat():
     return jsonify(result), 201
 
 
+# Returns the modify time of a file
+@app.route("/mtime", methods=["GET"])
+async def stat():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    if raw_path == "":
+        return "", 520
+    
+    parts = raw_path.split("/")
+    async with POOL.acquire() as conn:
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=None)
+
+        if node_id is None:
+            return "", 520
+
+        f_type, f_mtime = await conn.fetchrow(
+            """
+            SELECT type, i_mtime
+            FROM nodes WHERE id=$1
+            """, node_id)
+
+        if f_type != 1:
+            return "", 404
+    
+    return str(f_mtime), 201
+
+
 
 
 

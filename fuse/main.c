@@ -11,7 +11,8 @@
 
 #include "fuse_utils.h"
 #include "server_config.h"
-#include "debug.h"
+#include "cache_manage.h"
+#include "debug.h"  // Temporary
 
 static int current_user_id;
 static char current_username[32];

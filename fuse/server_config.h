@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string.h>
 #include <stdio.h>
 #define PORT 5050
