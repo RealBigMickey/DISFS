@@ -8,6 +8,12 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pthread.h>
+
+/* cache stored at -> HOME/.cache/disfs/{user_id}/{local_path}  */
+#define BUILD_CACHE_PATH(cache_path, id, path)  \
+            snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s", \
+            getenv("HOME"), id, path)
 
 
 /* Doubly linked-list for cached entries, earliest to latest */
@@ -22,8 +28,10 @@ typedef struct cache_entry_node {
 time_t fetch_mtime(const char *path, int user_id);
 
 int rmtree(const char *dir_path);
-void cache_init(const char *cache_root);
+void cache_init(void);
 void cache_exit(void);
-void cache_record_add(const char *path, uint64_t size);
-void cahce_record_remove(const char *path);
-void cache_garbage_collection(void);
+void cache_record_append(const char *path, uint64_t size, int current_user_id);
+void cache_record_delete(const char *path, uint64_t size, int current_user_id);
+void cache_record_pop(int current_user_id);
+
+void cache_garbage_collection(int current_user_id);

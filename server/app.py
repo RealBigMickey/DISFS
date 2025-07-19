@@ -189,7 +189,7 @@ async def stat():
 
 # Returns the modify time of a file
 @app.route("/mtime", methods=["GET"])
-async def stat():
+async def mtime():
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path", "").lstrip("/")
     if raw_path == "":

@@ -348,11 +348,11 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         return -EACCES;
     }
     
+    
 
-    /* cache stored at -> HOME/.cache/disfs/{user_id}/{local_path}  */
+    
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
 
     
     /* If cached by create or previous open, should be fine */
@@ -505,8 +505,8 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     
 
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+
     char *tmp = strdup(cache_path);
     mkdir_p(dirname(tmp));
     free(tmp);
@@ -568,8 +568,8 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
     
     /* Truncate local cache file */
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+
     if (truncate(cache_path, size) < 0)
         return -errno;
     
@@ -602,8 +602,8 @@ static int do_unlink(const char *path)
     }
 
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+
     unlink(cache_path);
 
     return 0;
@@ -637,8 +637,8 @@ static int do_rmdir(const char *path)
     }
 
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path), "%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+    
     rmdir(cache_path);
 
     return 0;
