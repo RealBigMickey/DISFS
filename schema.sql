@@ -11,7 +11,6 @@ CREATE TABLE IF NOT EXISTS nodes (
   name       TEXT   NOT NULL,
   parent_id  INT    REFERENCES nodes(id) ON DELETE CASCADE,  
   type       SMALLINT NOT NULL,  -- 1=file, 2=folder
-  message_id BIGINT,
   i_atime    BIGINT,
   i_mtime    BIGINT,
   i_ctime    BIGINT,

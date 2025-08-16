@@ -1,10 +1,17 @@
+ifeq ($(wildcard .env), )
+    $(error .env file missing! Create one before running make)
+endif
+
+include .env
+export
+
 
 TARGET = main
 SRCS = fuse/main.c fuse/fuse_utils.c fuse/server_config.c fuse/cache_manage.c
 OBJS = $(SRCS:.c=.o)
 
 CC = gcc
-CFLAGS = -Wall -g -std=c11 -D_DEFAULT_SOURCE `pkg-config fuse3 --cflags`
+CFLAGS = -D_FILE_OFFSET_BITS=64 -Wall -g -std=c11 -D_DEFAULT_SOURCE `pkg-config fuse3 --cflags`
 LDFLAGS = `pkg-config fuse3 --libs` -lcurl -lcjson
 
 
@@ -33,6 +40,8 @@ mount:
 	@sleep 0.1
 
 unmount:
+# clear cache folder on unmount just in-case
+	@rm -rf $(HOME)/.cache/disfs/
 	@fusermount3 -uz mnt 2>/dev/null || true
 
 

@@ -8,7 +8,21 @@ from quart import abort, request
 from server._config import NOTIFICATIONS_ID
 
 
-current_vault = 1
+current_vault = 1  # channel used for storage, on 1 currently for simplicity. TBD!
+
+
+async def split_parent_and_name(path: str):
+    # case root
+    if path == "":
+        return None, ""
+    
+    parts = path.split("/")
+    name = parts[-1]
+    parts.pop()
+    parent = "/".join(parts)
+    return parent, name
+
+
 
 async def validate_user(POOL):
     """
@@ -115,6 +129,101 @@ async def admin_console(discord_client, app):
                 print(f"Unknown command: \"{cmd}\"")
 
 
+
+async def node_info(conn, user_id: int, path: str):
+    """
+    Resolves node info from path, returns entire ROW
+    -> (id, user_id, name, parent_id, type, message_id,
+        i_atime, i_mtime, i_ctime, i_crtime)
+    or None if not found
+    """
+    if not path:
+        return None
+    parts = path.split("/")
+
+
+    parent_id = await conn.fetchval(
+        "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL", user_id
+    )
+    
+    if parent_id is None:
+        return None
+    
+    node_id = None
+    n_parts = len(parts)
+    for idx, comp in enumerate(parts):
+        row = await conn.fetchrow(
+            "SELECT id, type FROM nodes "
+            "WHERE user_id=$1 AND parent_id=$2 AND name=$3",
+            user_id, parent_id, comp
+        )
+        if not row:
+            return None
+        node_id = row["id"]
+        n_type = row["type"]
+
+        if idx < n_parts - 1 and n_type != 2:
+            return None
+        
+        parent_id = node_id
+    
+    full_row = await conn.fetchrow(
+        """
+        SELECT id, user_id, name, parent_id, type, message_id,
+          i_atime, i_mtime, i_ctime, i_crtime FROM nodes WHERE id=$1
+        """, node_id
+    )
+    return full_row  # returns object asyncpg.Record
+    
+
+
+async def is_descendant(conn, ancestor_id: int, maybe_descendant_id: int) -> bool:
+    return bool(await conn.fetchval(
+        "SELECT 1 FROM node_closure WHERE ancestor=$1 AND descendant=$2",
+        ancestor_id, maybe_descendant_id
+    ))
+
+
+
+async def get_parent_id(conn, user_id: int, parent_path: str):
+    """
+    Ensures parent dir exists and IS a directory, returns parent_id or None
+    """
+    # if not root
+    if parent_path == "":
+        return await conn.fetchval(
+            "SELECT id FROM nodes WHERE user_id=$1 AND parent_id IS NULL",
+            user_id
+        )
+    return await resolve_node(conn, user_id, parent_path, expected_type=2)
+
+
+
+# Might not be necessary???
+async def rewire_closure_for_move(conn, node_id: int, new_parent_id: int):
+    # Detach from ancestors
+    await conn.execute(
+        """
+        DELETE FROM node_closure
+         WHERE descendant IN (SELECT descendant FROM node_closure WHERE ancestor=$1)
+         AND ancestor IN(SELECT ancestor FROM node_closure WHERE descendant=$1 AND ancestor!=$1)
+        """, node_id)
+
+    # Attach under new_parent's ancestors
+    await conn.execute(
+        """
+        INSERT INTO node_closure (ancestor, descendant, depth)
+        SELECT super.ancestor, sub.descendant, super.depth + sub.depth + 1
+          FROM node_closure AS super
+          JOIN node_closure AS sub
+            ON super.descendant = $1  -- new parent
+           AND sub.ancestor   = $2  -- moved node
+        """,
+        new_parent_id, node_id
+    )
+
+
+
 async def create_closure(conn, new_id: int, parent_id: int | None):
     await conn.execute(
         """
@@ -149,8 +258,6 @@ async def create_closure(conn, new_id: int, parent_id: int | None):
 
 # type 1 -> file, type 2 -> directory
 async def resolve_node(conn, user_id: int, path: str, expected_type: int | None = None):
-
-    path = path.strip("/")
     parts = [p for p in path.split("/") if p]  # skip empty components
 
     node_id = None

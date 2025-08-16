@@ -104,7 +104,7 @@ async def seed_foo_txt(POOL):
                 await create_closure(conn, node, root)
 
             # single‐chunk entry at index 0
-            foo_msg_id = 1387459088228810843
+            foo_msg_id = 1402502296599793817
             await conn.execute(
                 """
                 INSERT INTO file_chunks(node_id, chunk_index, message_id, chunk_size)

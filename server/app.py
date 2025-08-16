@@ -9,7 +9,7 @@ from server.discord_api import get_client
 import asyncpg
 import tempfile
 
-from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure, resolve_node
+from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure, resolve_node, split_parent_and_name, node_info, is_descendant, get_parent_id, rewire_closure_for_move
 
 
 import sys
@@ -511,69 +511,154 @@ async def rmdir():
     return '', 201
 
 
-
+# Simply, rename.
 @app.route("/rename", methods=["POST"])
-async def rename_file():
-    user_id  = await validate_user(POOL)
-    old_raw  = request.args.get("old", "").lstrip("/")
-    new_raw  = request.args.get("new", "").lstrip("/")
+async def rename():
+    user_id = await validate_user(POOL)
+    a_path = request.args.get("a", "").strip("/")
+    b_path = request.args.get("b", "").strip("/")
 
-    if not old_raw or not new_raw:
-        return "Missing old or new path", 400
+    
+    if not a_path or not b_path:
+        return "Missing a or b paths", 400
 
-    parts = new_raw.split("/")
-    new_name = parts.pop()
-    parent_raw = "/".join(parts)   # "" is root
+    a_parent_path, a_name = await split_parent_and_name(a_path)
+    b_parent_path, b_name = await split_parent_and_name(b_path)
 
+    print(f'"{a_parent_path}   "{a_name}",  "{b_parent_path}   "{b_name}"')  # DEBUG use
+
+    if a_parent_path != b_parent_path:
+        return "Non-matching parent paths", 400
+    if not a_name or not b_name:
+        return "Invalid name(s)", 400
+    if a_name == b_name:
+        return "", 201
+    
     async with POOL.acquire() as conn, conn.transaction():
-        node_id = await resolve_node(conn, user_id, old_raw)
-        if node_id is None:
-            return "", 520
+        a_id = await resolve_node(conn, user_id, a_path, expected_type=None)
+        if not a_id:
+            return "Node not found", 520
 
-        parent_id = await resolve_node(conn, user_id, parent_raw, expected_type=2)
-        if parent_id is None:
-            return "", 520
-
+        # Double check that b_name doesn't already exist in parent
+        parent_id = await resolve_node(conn, user_id, a_parent_path, expected_type=2)
+        if not parent_id:
+            return "Parent not found", 520
         exists = await conn.fetchval(
             "SELECT 1 FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-            user_id, parent_id, new_name)
+            user_id, parent_id, b_name
+        )
         if exists:
             return "Destination exists", 409
 
+        now = int(time.time())
+        await conn.execute("UPDATE nodes SET i_ctime=$1, name=$2 WHERE id=$3",
+                              now, b_name, a_id)
+    return "", 201
+        
 
+
+
+# Handles moving files, non-replace
+@app.route("/rename_move", methods=["POST"])
+async def rename_move():
+    user_id  = await validate_user(POOL)
+    a_path  = request.args.get("a", "").strip("/")
+    b_path  = request.args.get("b", "").strip("/")
+
+    if not a_path or not b_path:
+        return "Missing a or b paths", 400
+    
+    if a_path == b_path:
+        return "", 201
+
+    b_parent_path, b_name = await split_parent_and_name(b_path)
+
+    if not b_name:
+        return "Invalid destination name", 400
+
+
+    async with POOL.acquire() as conn, conn.transaction():
+        a_row = await node_info(conn, user_id, a_path)
+        if not a_row:  # exit if a doesn't exist
+            return "No such file", 520
+
+        b_id = await resolve_node(conn, user_id, b_path, expected_type=None)
+        if b_id:  # exit if b exists
+            return "Destination exists", 409
+        
+        b_parent_id = await resolve_node(conn, user_id, b_parent_path, expected_type=2)
+        if b_parent_id is None:
+            return "Invalid destination(doesn't exist)", 520
+
+        # forbid moving under own descendant (cycle)
+        if await is_descendant(conn, a_row["id"], b_parent_id):
+            return "Cycle in a and b", 400
+
+        # update the parent_id, name, i_ctime for node a, cascade rewire
+        now = int(time.time())
         await conn.execute(
-            "UPDATE nodes "
-            "   SET parent_id=$1, name=$2, i_mtime=$3 "
-            " WHERE id=$4",
-            parent_id, new_name, int(time.time()), node_id)
-
-        await conn.execute(
-            """
-            DELETE FROM node_closure
-             WHERE descendant IN (
-               SELECT descendant FROM node_closure WHERE ancestor=$1
-             )
-               AND ancestor IN (
-               SELECT ancestor   FROM node_closure WHERE descendant=$1
-                 AND ancestor!=$1
-             )
-            """,
-            node_id)
-
-
-        await conn.execute(
-            """
-            INSERT INTO node_closure (ancestor, descendant, depth)
-            SELECT super.ancestor, sub.descendant, super.depth + sub.depth + 1
-              FROM node_closure AS super
-              JOIN node_closure AS sub
-                ON super.descendant = $1    -- new parent
-               AND sub.ancestor   = $2      -- moved node
-            """,
-            parent_id, node_id)
+            "UPDATE nodes SET parent_id=$1, name=$2, i_ctime=$3 WHERE id=$4",
+            b_parent_id, b_name, now, a_row["id"])
+        
+        await rewire_closure_for_move(conn, a_row["id"], b_parent_id)
 
     return "", 201
 
+
+# Handles swapping of files
+@app.route("/swap", methods=["POST"])
+async def rename_swap():
+    user_id = await validate_user(POOL)
+    a_path = request.args.get("a", "").strip("/")
+    b_path = request.args.get("b", "").strip("/")
+
+
+    if not a_path or not b_path:
+        return "Missing a or b paths", 400
+    if a_path == b_path:
+        return "", 201
+
+    async with POOL.acquire() as conn, conn.transaction():
+        a_row = await node_info(conn, user_id, a_path)
+        b_row = await node_info(conn, user_id, b_path)
+        if not b_row or not a_row:
+            return "Destination(s) doesn't exists", 520
+
+        # disallow swapping ancestor/descendant (would create cycle)
+        if await is_descendant(conn, a_row["id"], b_row["id"]) or \
+           await is_descendant(conn, b_row["id"], a_row["id"]):
+            return "Cannot swap ancestor/descendant", 400
+        
+        if a_row["type"] != 1 or b_row["type"] != 1:
+            return "Cannot swap with directories YET!", 400
+        
+        a_id, b_id = a_row["id"], b_row["id"]
+        now = int(time.time())
+
+        await conn.execute(
+            """
+            UPDATE nodes SET name=$1, parent_id=$2, i_ctime=$3 
+            WHERE id=$4
+            """,
+            b_row["name"], b_row["parent_id"], now, a_id
+        )
+    
+        await conn.execute(
+            """
+            UPDATE nodes SET name=$1, parent_id=$2, i_ctime=$3 
+            WHERE id=$4
+            """,
+            a_row["name"], a_row["parent_id"], now, b_id
+        )
+
+
+
+        # rewire closure for both subtrees
+        await rewire_closure_for_move(conn, a_id, b_row["parent_id"])
+        await rewire_closure_for_move(conn, b_id, a_row["parent_id"])
+
+    return "", 201
+        
 
 
 

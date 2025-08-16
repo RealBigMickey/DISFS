@@ -1,7 +1,7 @@
 #include "fuse_utils.h"
 #include <stdlib.h>
-#include <string.h>
 #include <errno.h>
+#include <libgen.h>
 
 
 // size = size of each member, nmemb = number of members
@@ -24,12 +24,14 @@ static size_t write_file_cb(void *ptr, size_t sz, size_t nm, void *userdata) {
     return fwrite(ptr, sz, nm, (FILE *)userdata);
 }
 
+
+
 /* Returns 0 on successful HTTP request, else -1.
  * If status exists, fill it with the HTTP response code.
  * LSB on status's address dictates GET or POST,
  * GET -> 0, POST -> 1
  */
-int http_get(const char *url, string_buf_t *resp, uint32_t *status) {
+int http_request(const char *url, string_buf_t *resp, uint32_t *status) {
     CURL *c = curl_easy_init();
     if (!c)
         return -1;
@@ -59,6 +61,24 @@ int http_get(const char *url, string_buf_t *resp, uint32_t *status) {
     return (rc == CURLE_OK) ? 0 : -1;
 }
 
+
+
+/* Sends a POST request to destined http, saves response to status_out.
+ * Discards response string.
+ */
+int http_post_status(const char *url, uint32_t *status_out) {
+    // creates LSB flag for http_request to POST
+    uint32_t status = 0;
+    uint32_t *status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+    if (http_request(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+    if (status_out)
+        *status_out = status;
+    return 0;
+}
+
+
+
 /* Gets file from http stream */
 int http_get_stream(const char *url, FILE *out) {
     CURL *c = curl_easy_init();
@@ -73,6 +93,7 @@ int http_get_stream(const char *url, FILE *out) {
     curl_easy_cleanup(c);
     return (rc == CURLE_OK) ? 0 : -1;
 }
+
 
 
 /* Sends file through http */
@@ -122,6 +143,7 @@ void mkdir_p(const char *dir) {
 }
 
 
+
 char *url_encode(const char* path)
 {
     CURL *c = curl_easy_init();
@@ -142,11 +164,128 @@ char *url_encode(const char* path)
 }
 
 
-#define NO_LSLASH(x) (*x == '/' ? x+1 : x)
-void local_cache_path(char *dst, size_t dstsz,
-                             const char *user_home,
-                             const char *remote_path)
-{
-    snprintf(dst, dstsz, "%s/.cache/disfs/%s", user_home, NO_LSLASH(remote_path)); // skip leading '/'
+
+
+int same_parent_dir(const char *a, const char *b) {
+    char *da = strdup(a), *db = strdup(b);
+    if (!da || !db) {
+        free(da);
+        free(db);
+        return 0;
+    }
+    int returner = (strcmp(dirname(da), dirname(db)) == 0);
+    free(da);
+    free(db);
+    return returner;
+}
+
+
+
+int backend_unlink(int current_user_id, const char *path) {
+    char *esc = url_encode(path);
+    if (!esc) return -EIO;
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+             "http://%s/unlink?user_id=%d&path=%s",
+             get_server_ip(), current_user_id, esc);
+    curl_free(esc);
+
+    uint32_t status = 0;
+    if (http_post_status(url, &status) != 0)
+        return -ECOMM;
+    if (status == 201)
+        return 0;
+    if (status == 520)
+        return -ENOENT;
+    return -EIO;
+}
+
+/* uploads the file at cache_path to the server backend */
+int upload_file_chunks(int current_user_id, const char *logical_path, const char *cache_path) {
+    FILE *fp = fopen(cache_path, "rb");
+    if (!fp)
+        return -EIO;
+
+    void *chunk_buf = malloc(CHUNK_SIZE);
+    if (!chunk_buf){
+        fclose(fp);
+        return -ENOMEM;
+    }
+
+
+    int returner = 0;
+    int chunk = 0;
+    size_t n;
+    while ((n = fread(chunk_buf, 1, CHUNK_SIZE, fp)) > 0) {
+        LOGMSG("We CHUNKIN'");
+        char *esc = url_encode(logical_path);
+        if (!esc) {
+            returner = -EIO;
+            break;
+        }
+            
+
+        char url[URL_MAX];
+        snprintf(url, sizeof(url),
+                "http://%s/upload?user_id=%d&path=%s&chunk=%d",
+                get_server_ip(), current_user_id, esc, chunk);
+        curl_free(esc);
+
+        uint32_t status = 0;
+        if (http_post_stream(url, chunk_buf, n, &status) != 0)
+            returner = -ECOMM;
+
+        LOGMSG("RELEASE STATUS: %d", status);
+        
+        if (status != 201) {
+            returner = -EIO;
+            break;
+        }
+
+
+        chunk++;
+    }
+    free(chunk_buf);
+    fclose(fp);
+
+    return returner;
+}
+
+
+int backend_exists(int current_user_id, const char *path, int *exists_out) {
+    char *esc = url_encode(path);
+    if (!esc)
+        return -EIO;
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+             "http://%s/stat?user_id=%d&path=%s",
+             get_server_ip(), current_user_id, esc);
+    curl_free(esc);
+
+    uint32_t status = 0;
+    if (http_request(url, NULL, &status) != 0)
+        return -ECOMM;
+    if (exists_out)
+        *exists_out = (status == 201);
+    return 0;
+}
+
+
+int cache_swap(const char *a, const char *b) {
+#if defined(RENAME_EXCHANGE) && defined(SYS_renameat2)
+    if (renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE) == 0)
+        return 0;
+    return -errno;
+#else
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s.__swap__.%d", a, getpid());
+    if (rename(a, tmp) != 0)
+        return -errno;
+    if (rename(b, a) != 0)
+        return -errno;
+    if (rename(tmp, b) != 0)
+        return -errno;
+    return 0;
+#endif
 }
 
