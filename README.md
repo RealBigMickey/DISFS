@@ -3,8 +3,8 @@
 > *It uses the Discord CDN solely for research and educational purposes.*
 
 
-DISFS turns **Discord** into a backend object store that you can mount as a normal POSIX file system via **FUSE 3**.
-Doesn’t store files locally, instead communicates with a remote server I run (or you) to handle all storage operations.
+**DISFS** turns Discord into a mountable POSIX file system.  
+Files aren’t stored locally – instead, they are split into chunks and uploaded as Discord attachments. Reads are streamed back on demand from a remote server.
 
 - Client side: **C FUSE 3 daemon**  
 - Server side: **Python (Quart + PostgreSQL)**  
@@ -137,6 +137,11 @@ psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTAR
 ```
 
 --- 
+### 📌 Changelog
+
+v0.1: First working release (basic FUSE FS + Discord backend).  
+v0.2: Added first version of cache control (local cache directory + eviction logic).  
+
 
 ### ⚠️ Known Limitations / TODO
 - No per-user encryption yet (planned: AES-GCM chunk layer).
@@ -154,6 +159,7 @@ psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTAR
 - [ ] Async streaming with aiohttp instead of sync libcurl
 - [ ] Per-chunk integrity check (SHA-256)
 - [ ] Smarter eviction in local cache
+
 ---
 
 ### Credits

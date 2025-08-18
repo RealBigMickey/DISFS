@@ -524,9 +524,6 @@ async def rename():
 
     a_parent_path, a_name = await split_parent_and_name(a_path)
     b_parent_path, b_name = await split_parent_and_name(b_path)
-
-    print(f'"{a_parent_path}   "{a_name}",  "{b_parent_path}   "{b_name}"')  # DEBUG use
-
     if a_parent_path != b_parent_path:
         return "Non-matching parent paths", 400
     if not a_name or not b_name:
@@ -543,16 +540,13 @@ async def rename():
         parent_id = await resolve_node(conn, user_id, a_parent_path, expected_type=2)
         if not parent_id:
             return "Parent not found", 520
-        exists = await conn.fetchval(
-            "SELECT 1 FROM nodes WHERE user_id=$1 AND parent_id=$2 AND name=$3",
-            user_id, parent_id, b_name
-        )
-        if exists:
-            return "Destination exists", 409
 
         now = int(time.time())
-        await conn.execute("UPDATE nodes SET i_ctime=$1, name=$2 WHERE id=$3",
+        try:
+            await conn.execute("UPDATE nodes SET i_ctime=$1, name=$2 WHERE id=$3",
                               now, b_name, a_id)
+        except UniqueViolationError:
+            return "Destination exists", 409
     return "", 201
         
 
@@ -582,8 +576,7 @@ async def rename_move():
         if not a_row:  # exit if a doesn't exist
             return "No such file", 520
 
-        b_id = await resolve_node(conn, user_id, b_path, expected_type=None)
-        if b_id:  # exit if b exists
+        if await resolve_node(conn, user_id, b_path, expected_type=None):
             return "Destination exists", 409
         
         b_parent_id = await resolve_node(conn, user_id, b_parent_path, expected_type=2)
@@ -596,10 +589,14 @@ async def rename_move():
 
         # update the parent_id, name, i_ctime for node a, cascade rewire
         now = int(time.time())
-        await conn.execute(
-            "UPDATE nodes SET parent_id=$1, name=$2, i_ctime=$3 WHERE id=$4",
-            b_parent_id, b_name, now, a_row["id"])
-        
+        try:
+            await conn.execute(
+                "UPDATE nodes SET parent_id=$1, name=$2, i_ctime=$3 WHERE id=$4",
+                b_parent_id, b_name, now, a_row["id"]
+            )
+        except UniqueViolationError:
+            return "Distination exists", 409
+
         await rewire_closure_for_move(conn, a_row["id"], b_parent_id)
 
     return "", 201
@@ -611,7 +608,6 @@ async def rename_swap():
     user_id = await validate_user(POOL)
     a_path = request.args.get("a", "").strip("/")
     b_path = request.args.get("b", "").strip("/")
-
 
     if not a_path or not b_path:
         return "Missing a or b paths", 400
@@ -629,10 +625,30 @@ async def rename_swap():
            await is_descendant(conn, b_row["id"], a_row["id"]):
             return "Cannot swap ancestor/descendant", 400
         
-        if a_row["type"] != 1 or b_row["type"] != 1:
-            return "Cannot swap with directories YET!", 400
-        
-        a_id, b_id = a_row["id"], b_row["id"]
+        if a_row["type"] != b_row["type"]:
+            return "Cannot swap conflicting types! (dir & file)", 400
+        a_parent_id, b_parent_id = a_row["parent_id"], b_row["parent_id"]
+        a_name, b_name = a_row["name"], b_row["name"]
+
+
+        # Check for thrid party name conflicts
+        conflict1 = await conn.fetchval(
+            """
+            SELECT 1 FROM nodes
+              WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id<>$4
+            """, user_id, a_parent_id, b_name, a_row["id"]
+        )
+        conbflict2 = await conn.fetchval(
+            """
+            SELECT 1 FROM nodes
+              WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id<>$4
+            """, user_id, b_parent_id, a_name, b_row["id"]
+        )
+        if conflict1 or conbflict2:
+            return "Destination exists", 409
+
+        # Defer uniqueness for mid-statement collision
+        await conn.execute("SET CONSTRAINTS uq_nodes_dirname DEFERRED")
         now = int(time.time())
 
         await conn.execute(
@@ -650,8 +666,6 @@ async def rename_swap():
             """,
             a_row["name"], a_row["parent_id"], now, b_id
         )
-
-
 
         # rewire closure for both subtrees
         await rewire_closure_for_move(conn, a_id, b_row["parent_id"])
