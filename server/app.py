@@ -674,6 +674,30 @@ async def rename_swap():
     return "", 201
         
 
+@app.route("/modi_mtime", methods=["POST"])
+async def modi_mtime():
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    new_mtime = request.args.get("mtime")
+    if not raw_path or new_mtime is None:
+        return "Missing path or new_mtime", 400
+
+    try:
+        new_mtime = int(new_mtime)
+        if new_mtime < 0:
+            return "mtime must be positive", 400
+    except ValueError:
+        return "mtime must be an integer", 400
+    
+
+    async with POOL.acquire() as conn, conn.transaction():
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
+        if node_id is None:
+            return "Invalid destination(doesn't exist)", 520
+        await conn.execute("UPDATE nodes SET i_mtime=$1 WHERE id=$2",
+                            new_mtime, node_id)
+        
+    return "", 201
 
 
 @app.route("/ping", methods=["GET"])

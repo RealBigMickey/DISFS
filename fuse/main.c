@@ -9,6 +9,7 @@
 #include <libgen.h>
 #include <cjson/cJSON.h>
 #include <linux/fs.h>
+#include <fcntl.h>
 
 #include "fuse_utils.h"
 #include "server_config.h"
@@ -61,7 +62,7 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
 
     if (!logged_in)
         return -EACCES;
-    
+
     char *esc = url_encode(path);
     if (!esc)
         return -EIO;
@@ -71,7 +72,7 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
             "http://%s/stat?user_id=%d&path=%s",
             get_server_ip(), current_user_id, esc);
     curl_free(esc);
-    
+
     string_buf_t resp = {0};
     uint32_t status = 0;
     int rc = http_request(url, &resp, &status);
@@ -81,16 +82,16 @@ static int do_getattr(const char *path, struct stat *st, struct fuse_file_info *
         return -ENOENT;
     }
 
-    if (rc != 0)
+    if (rc != 0) {
+        free(resp.ptr);
         return -ECOMM;
-    
+    }
 
     if (status != 201) {
         free(resp.ptr);
         return -EIO;
     }
 
-    
     // parse JSON
     cJSON *root = cJSON_Parse(resp.ptr);
     free(resp.ptr);
@@ -142,28 +143,28 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     filler(buf, ".", NULL, 0, 0);
     filler(buf, "..", NULL, 0, 0);
 
+    // COMMANDS
+    if (IS_COMMAND_PATH(path)) {
+        filler(buf, "COMMANDS:", NULL, 0, 0);
+        filler(buf, "serverip (Set server ip, defaults to localhost)", NULL, 0, 0);
+        filler(buf, "register (register & login)", NULL, 0, 0);
+        filler(buf, "ping (login)", NULL, 0, 0);
+        filler(buf, "pong (logout)", NULL, 0, 0);
+        filler(buf, "doggo (dog gif)", NULL, 0, 0);
+        return 0;
+    }
+
+    if (strcmp(path, "/.command/ping") == 0 || strcmp(path, "/.command/register") == 0) {
+        filler(buf, "Follow up with your username (no spaces)", NULL, 0, 0);
+        return 0;
+    }
+
     if (!logged_in) {
         if (strcmp(path,"/") == 0) {
             filler(buf, "You're not logged o.o", NULL, 0, 0);
             filler(buf, "do .command for commands", NULL, 0, 0);
             return 0;
         } 
-
-        // COMMANDS
-        if (IS_COMMAND_PATH(path)) {
-            filler(buf, "COMMANDS:", NULL, 0, 0);
-            filler(buf, "serverip (Set server ip, defaults to localhost)", NULL, 0, 0);
-            filler(buf, "register (register & login)", NULL, 0, 0);
-            filler(buf, "ping (login)", NULL, 0, 0);
-            filler(buf, "pong (logout)", NULL, 0, 0);
-            filler(buf, "doggo (dog gif)", NULL, 0, 0);
-            return 0;
-        }
-
-        if (strcmp(path, "/.command/ping") == 0 || strcmp(path, "/.command/register") == 0) {
-            filler(buf, "Follow up with your username (no spaces)", NULL, 0, 0);
-            return 0;
-        }
         return -ENOENT;
     }
     
@@ -237,19 +238,21 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     LOGMSG("Registered/logged in now! :D");
                     return snprintf(buf, size, "Registered and Logged in as \"%s\"\n", name);
                 }
+                free(resp.ptr);
+                return snprintf(buf, size, "Failed to login. (No http response)\n");
             } else {
+                free(resp.ptr);
                 return snprintf(buf, size, "Failed to login.\n");
             }
         }
         else if (!logged_in && 
           strncmp(path, CSTR_LEN("/.command/ping/")) == 0) {
             const char *username = path + sizeof("/.command/ping/") - 1;
-            
  
             char url[URL_MAX];
             snprintf(url, sizeof(url),
                 "http://%s/login?user=%s", get_server_ip(), username);
-              
+
             string_buf_t resp = {0};
             if (http_request(url, &resp, NULL) == 0) {
                 int id;
@@ -264,7 +267,6 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     return snprintf(buf, size, "Logged in as \"%s\"\n", name);
                 }
             }
-
             free(resp.ptr);
             return snprintf(buf, size, "Failed to login.\n");
         }
@@ -291,7 +293,11 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
 
 
     // do_open should've stored fd in fi->fh
-    ssize_t written = pread((int)fi->fh, buf, size, offset);
+    fh_t *fh = (fh_t*)(uintptr_t)fi->fh;
+    if (!fh)
+        return -EBADF;
+    int fd = fh->fd;
+    ssize_t written = pread(fd, buf, size, offset);
     if (written < 0)
         return -errno;
     return (int)written;
@@ -307,7 +313,7 @@ static int do_mkdir(const char *path, mode_t mode)
     char *esc = url_encode(path);
     if (!esc)
         return -EIO;
-    
+
     char url[URL_MAX];
     snprintf(url, sizeof(url), "http://%s/mkdir?user_id=%d&path=%s",
             get_server_ip(), current_user_id, esc);
@@ -316,7 +322,7 @@ static int do_mkdir(const char *path, mode_t mode)
     CURL *c = curl_easy_init();
     if (!c)
         return -EIO;
-    
+
     uint32_t status = 0;
     curl_easy_setopt(c, CURLOPT_URL, url);
     curl_easy_setopt(c, CURLOPT_POST, 1L);
@@ -335,210 +341,6 @@ static int do_mkdir(const char *path, mode_t mode)
         return -ENOENT;
 
     return -EIO;
-}
-
-
-static int do_open(const char *path, struct fuse_file_info *fi)
-{
-    LOGMSG("IN open with path: %s", path);
-    if (IS_COMMAND_PATH(path))
-        return 0;
-
-    if (!logged_in)
-        return -EACCES;
-    
-    // Guard against directories, though unlikely
-    if (fi->flags & O_DIRECTORY)
-        return -EISDIR;
-    
-    char cache_path[PATH_MAX];
-    BUILD_CACHE_PATH(cache_path, current_user_id, path);
-
-    time_t remote_mtme = 0;
-    struct stat st;
-    /* Check if cache exists && mtime == mtime on the server's side*/
-    if (access(cache_path, F_OK) == 0 &&
-        stat(cache_path, &st) == 0) {
-        remote_mtme = fetch_mtime(path, current_user_id);
-
-        if (st.st_mtime == remote_mtme) {
-            int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
-            int fd = open(cache_path, flags);
-            if (fd < 0)
-                return -errno;
-            fi->fh = fd;
-            return 0;
-        }
-
-        LOGMSG("cache miss! (diff mtime), hitting '/download' route...");
-    }
-
-
-
-    /* Download from server otherwise */
-    char *dup = strdup(cache_path);
-    char *dir = dirname(dup);
-    mkdir_p(dir);
-    free(dup);
-
-    char *esc = url_encode(path);
-    if (!esc)
-        return -EIO;
-
-    char url[URL_MAX];
-    snprintf(url, sizeof(url),
-            "http://%s/download?user_id=%d&path=%s",
-            get_server_ip(), current_user_id, esc);
-    curl_free(esc);
-
-    FILE *fp = fopen(cache_path, "wb");
-    if (!fp)
-        return -errno;
-
-    if (http_get_stream(url, fp) != 0) {
-        fclose(fp);
-        unlink(cache_path);
-        return -ECOMM;
-    }
-    fclose(fp);
-
-    /* Set mtime of local to local cache file */
-    if (!remote_mtme)
-        remote_mtme = fetch_mtime(path, current_user_id);
-
-    struct timespec tv[2];
-    tv[0].tv_sec = UTIME_OMIT;  // don't touch atime
-    tv[0].tv_nsec = 0;
-    tv[1].tv_sec = remote_mtme;
-    tv[1].tv_nsec = 0;
-    utimensat(AT_FDCWD, cache_path, tv, 0);
-
-
-    /* stash fd in fi->fh */
-    int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
-    int fd = open(cache_path, flags);
-    if (fd < 0) {
-        unlink(cache_path);
-        return -errno;
-    }
-    fi->fh = fd;
-
-    /* Add to cached history since it's downloaded */
-    off_t size = 0;
-    if (fstat(fd, &st) == 0)
-        size = st.st_size;
-        
-    cache_record_append(path, size, current_user_id);
-    cache_garbage_collection(current_user_id);
-    return 0;
-}
-
-
-static int do_release(const char *path, struct fuse_file_info *fi)
-{
-    LOGMSG("IN release with path: %s", path);
-
-    fsync((int)fi->fh);
-    close((int)fi->fh);
-
-    /* NEVER upload commands or temp files on release */
-    if (IS_COMMAND_PATH(path) || !logged_in || is_temp_path(path))
-        return 0;
-
-    if ((fi->flags & O_ACCMODE) == O_RDONLY)
-        return 0;
-
-
-    char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path),"%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
-
-    int returner = upload_file_chunks(current_user_id, path, cache_path);
-
-    /* Reconcile cache from history */
-    struct stat st;
-    int new_size = 0;
-    if (stat(cache_path, &st) == 0)
-        new_size = st.st_size;
-    
-    /* Try to remove old entry then append the new one */
-    cache_record_delete(path, -1);
-    cache_record_append(path, new_size, current_user_id);
-        
-    cache_garbage_collection(current_user_id);
-
-    LOGMSG("leaving release (%d)", returner);
-    return returner;
-}
-
-/* Creates a temporary file (empty) in cache folder, logging onto server is handled on release */
-static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
-{
-    LOGMSG("IN CREATE path=%s mode=0%o fi->flags=0x%lx", path, mode, (unsigned long)fi->flags);
-    if (!logged_in || IS_COMMAND_PATH(path))
-        return -EACCES;
-    
-    
-    char cache_path[PATH_MAX];
-    BUILD_CACHE_PATH(cache_path, current_user_id, path);
-
-    char *tmp = strdup(cache_path);
-    mkdir_p(dirname(tmp));
-    free(tmp);
-
-    /* if temp_path, just create the file without hitting up the server */
-    if(is_temp_path(path)) {
-        int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
-        if (fd < 0)
-            return -errno;
-        fi->fh = fd;
-        return 0;
-    }
-    
-
-    uint32_t status = 0;
-    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
-
-    char *esc = url_encode(path);
-    if (!esc)
-        return -EIO;
-    
-    char url[URL_MAX];
-    snprintf(url, sizeof(url),
-            "http://%s/create?user_id=%d&path=%s",
-            get_server_ip(), current_user_id, esc);
-    curl_free(esc);
-
-    if (http_request(url, NULL, status_ptr) != 0)
-        return -ECOMM;
-    LOGMSG("CREATE STATUS: %d", status);
-    if(status == 400)
-        return -EEXIST;
-    if (status != 201)
-        return -EIO;
-
-
-    int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
-    if (fd < 0)
-        return -errno;
-    fi->fh = fd;
-
-    LOGMSG("leaving create");
-    return 0;
-}
-
-
-static int do_write(const char *path, const char *buf,
-                    size_t size, off_t offset,
-                    struct fuse_file_info *fi)
-{
-    LOGMSG("IN write");
-    if (!logged_in || IS_COMMAND_PATH(path))
-        return -EACCES;
-
-    ssize_t written = pwrite((int)fi->fh, buf, size, offset);
-
-    return (written < 0) ? -errno : (int)written ;
 }
 
 
@@ -594,6 +396,276 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
     
     return 0;
 }
+
+
+
+
+static int do_open(const char *path, struct fuse_file_info *fi)
+{
+    LOGMSG("IN open with path: %s", path);
+    if (IS_COMMAND_PATH(path))
+        return 0;
+
+    if (!logged_in)
+        return -EACCES;
+    
+    // Guard against directories, though unlikely
+    if (fi->flags & O_DIRECTORY)
+        return -EISDIR;
+    
+
+    char cache_path[PATH_MAX];
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+
+    fh_t *fh = malloc(sizeof(fh_t));
+    if (!fh) {
+        return -ENOMEM;
+    }
+
+    if (fi->flags & O_TRUNC) {
+        LOGMSG("O_TRUNC detected, truncating %s", path);
+        int rc = do_truncate(path, 0, fi);
+        if (rc != 0) {
+            free(fh);
+            return rc;
+        }
+        int fd = open(cache_path, O_RDWR | O_CREAT, 0644);
+        if (fd < 0) {
+            free(fh);
+            return -errno;
+        }
+
+        fh->fd = fd;
+        fh->dirty = 1;
+        fi->fh = (uint64_t)(uintptr_t)fh;
+        return 0;
+    }
+
+    time_t remote_mtme = 0;
+    struct stat st;
+    /* Check if cache exists && mtime == mtime on the server's side*/
+    if (access(cache_path, F_OK) == 0 &&
+        stat(cache_path, &st) == 0) {
+        remote_mtme = fetch_mtime(path, current_user_id);
+
+        if (st.st_mtime == remote_mtme) {
+            int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+            int fd = open(cache_path, flags);
+            if (fd < 0) {
+                free(fh);
+                return -errno;
+            }
+
+            fh->fd = fd;
+            fh->dirty = 0;
+            fi->fh = (uint64_t)(uintptr_t)fh;
+            return 0;
+        }
+        LOGMSG("cache miss! (diff mtime), hitting '/download' route...");
+    }
+
+    /* Download from server otherwise */
+    char *dup = strdup(cache_path);
+    char *dir = dirname(dup);
+    mkdir_p(dir);
+    free(dup);
+
+    char *esc = url_encode(path);
+    if (!esc) {
+        free(fh);
+        return -EIO;
+    }
+
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://%s/download?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
+    curl_free(esc);
+
+    FILE *fp = fopen(cache_path, "wb");
+    if (!fp) {
+        free(fh);
+        return -errno;
+    }
+
+    if (http_get_stream(url, fp) != 0) {
+        free(fh);
+        fclose(fp);
+        unlink(cache_path);
+        return -ECOMM;
+    }
+    fclose(fp);
+
+    /* Set mtime of local to local cache file */
+    if (!remote_mtme)
+        remote_mtme = fetch_mtime(path, current_user_id);
+
+    struct timespec tv[2] = {0};
+    tv[0].tv_nsec = UTIME_OMIT;
+    tv[1].tv_sec = remote_mtme;
+    tv[1].tv_nsec = 0;
+    utimensat(AT_FDCWD, cache_path, tv, 0);
+
+
+    /* stash fd in fi->fh */
+    int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+    int fd = open(cache_path, flags);
+    if (fd < 0) {
+        free(fh);
+        unlink(cache_path);
+        return -errno;
+    }
+
+    fh->fd = fd;
+    fh->dirty = 0;
+    fi->fh = (uint64_t)(uintptr_t)fh;
+
+    /* Add to cached history since it's downloaded */
+    off_t size = 0;
+    if (fstat(fd, &st) == 0)
+        size = st.st_size;
+        
+    cache_record_append(path, size, current_user_id);
+    cache_garbage_collection(current_user_id);
+    return 0;
+}
+
+
+static int do_release(const char *path, struct fuse_file_info *fi)
+{
+    LOGMSG("IN release with path: %s", path);
+    fh_t *fh = (fh_t*)(uintptr_t)fi->fh;
+    if (!fh)
+        return -EBADF;
+    int fd = fh->fd;
+    if (fd) {
+        fsync(fd);
+        close(fd);
+    }
+    
+    /* NEVER upload commands or temp files on release */
+    if (IS_COMMAND_PATH(path) || !logged_in || is_temp_path(path) || !fh->dirty)
+        return 0;
+
+    if ((fi->flags & O_ACCMODE) == O_RDONLY)
+        return 0;
+
+
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path),"%s/.cache/disfs/%d%s",
+            getenv("HOME"), current_user_id, path);
+
+    int returner = upload_file_chunks(current_user_id, path, cache_path);
+
+    /* Reconcile cache from history */
+    struct stat st;
+    int new_size = 0;
+    if (stat(cache_path, &st) == 0)
+        new_size = st.st_size;
+    
+    /* Try to remove old entry then append the new one */
+    cache_record_delete(path, -1);
+    cache_record_append(path, new_size, current_user_id);
+        
+    cache_garbage_collection(current_user_id);
+
+    LOGMSG("leaving release (%d)", returner);
+    free(fh);
+    return returner;
+}
+
+/* Creates a temporary file (empty) in cache folder, logging onto server is handled on release */
+static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    LOGMSG("IN CREATE path=%s mode=0%o fi->flags=0x%lx", path, mode, (unsigned long)fi->flags);
+    if (!logged_in || IS_COMMAND_PATH(path))
+        return -EACCES;
+    
+    
+    char cache_path[PATH_MAX];
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+
+    char *tmp = strdup(cache_path);
+    mkdir_p(dirname(tmp));
+    free(tmp);
+
+    /* if temp_path, just create the file without hitting up the server */
+    if(is_temp_path(path)) {
+        int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
+        if (fd < 0)
+            return -errno;
+        fh_t *fh = malloc(sizeof(fh_t));
+        if (!fh) {
+            close(fd);
+            return -ENOMEM;
+        }
+        fh->fd = fd;
+        fh->dirty = 0;
+        fi->fh = (uint64_t)(uintptr_t)fh;
+        return 0;
+    }
+    
+
+    uint32_t status = 0;
+    uint32_t* status_ptr = (uint32_t*)((uintptr_t)&status | 1);
+
+    char *esc = url_encode(path);
+    if (!esc)
+        return -EIO;
+    
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://%s/create?user_id=%d&path=%s",
+            get_server_ip(), current_user_id, esc);
+    curl_free(esc);
+
+    if (http_request(url, NULL, status_ptr) != 0)
+        return -ECOMM;
+    LOGMSG("CREATE STATUS: %d", status);
+    if(status == 400)
+        return -EEXIST;
+    if (status != 201)
+        return -EIO;
+
+
+    int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
+    if (fd < 0)
+        return -errno;
+
+    fh_t *fh = malloc(sizeof(fh_t));
+    if (!fh) {
+        close(fd);
+        return -ENOMEM;
+    }
+    fh->fd = fd;
+    fh->dirty = 0;
+    fi->fh = (uint64_t)(uintptr_t)fh;
+
+    LOGMSG("leaving create");
+    return 0;
+}
+
+
+static int do_write(const char *path, const char *buf,
+                    size_t size, off_t offset,
+                    struct fuse_file_info *fi)
+{
+    LOGMSG("IN write");
+    if (!logged_in || IS_COMMAND_PATH(path))
+        return -EACCES;
+    fh_t *fh = (fh_t*)(uintptr_t)fi->fh;
+    if (!fh)
+        return -EBADF;
+    int fd = fh->fd;
+    
+
+    ssize_t written = pwrite(fd, buf, size, offset);
+    if (written > 0)
+        fh->dirty = 1;
+
+    return (written < 0) ? -errno : (int)written ;
+}
+
 
 static int do_unlink(const char *path)
 {
@@ -659,6 +731,11 @@ static int do_rmdir(const char *path)
 
     if (http_request(url, NULL, status_ptr) != 0)
         return -ECOMM;
+    
+    if (status == 404) {
+        LOGMSG("rmdir not empty for path \"%s\"", path);
+        return -ENOTEMPTY;
+    }
     
     if (status != 201) {
         LOGMSG("rmdir error: returned %d for path \"%s\"", status, path);
@@ -855,6 +932,49 @@ static int do_rename(const char *from_path,
     return 0;
 }
 
+
+static int do_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+    if (!logged_in || IS_COMMAND_PATH(path))
+        return -EACCES;
+    
+    char cache_path[PATH_MAX];
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
+    (void)utimensat(AT_FDCWD, cache_path, tv, 0);
+
+    // propagate mtime to backend too
+    int push_backend = 1;
+    time_t mtime_sec = 0;
+
+    if (!tv || tv[1].tv_nsec == UTIME_NOW) {
+        // NULL = use now for both
+        mtime_sec = time(NULL);
+    } else if(tv[1].tv_nsec == UTIME_OMIT) {
+        push_backend = 0;
+    } else {
+        mtime_sec = tv[1].tv_sec;
+    }
+
+    if (push_backend) {
+        char *esc = url_encode(path);
+        if (!esc)
+            return -EIO;
+
+        char url[URL_MAX];
+        snprintf(url, sizeof(url),
+                 "http://%s/modi_mtime?user_id=%d&path=%s&mtime=%jd",
+                 get_server_ip(), current_user_id, esc, (intmax_t)mtime_sec);
+        curl_free(esc);
+
+        uint32_t status = 0;
+        int rc = http_post_status(url, &status);
+        if (rc)
+            return rc;
+        if (status != 200 && status != 201)
+            return -EIO;
+    }
+    return 0;
+}
+
 void *do_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
     cache_init();
     return NULL;
@@ -879,6 +999,7 @@ static struct fuse_operations ops = {
     .unlink = do_unlink,
     .rmdir = do_rmdir,
     .rename = do_rename,
+    .utimens = do_utimens,
 };
 
 int main(int argc, char *argv[])

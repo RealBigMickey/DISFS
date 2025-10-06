@@ -19,6 +19,11 @@ typedef struct string_buf {
     size_t len;
 } string_buf_t;
 
+typedef struct {
+    int32_t fd;
+    int8_t dirty;
+} fh_t;
+
 size_t write_cb(void *data, size_t size, size_t nmemb, void *userp);
 
 
