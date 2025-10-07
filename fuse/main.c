@@ -168,6 +168,8 @@ static int do_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         return -ENOENT;
     }
     
+    /* For better debugging */
+    update_cache_status();
 
     char *esc = url_encode(path);
     if (!esc)
@@ -382,18 +384,23 @@ static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
         return -errno;
 
 
-    /* Reconcile cache from history */
+    /* Remove old cache here, do_release uploads new cache */
     struct stat st;
-    int new_size = 0;
+    off_t file_size = 0;
     if (stat(cache_path, &st) == 0)
-        new_size = st.st_size;
-    
-    /* Try to remove old entry then append the new one */
-    cache_record_delete(path, -1);
-    cache_record_append(path, new_size, current_user_id);
-        
-    cache_garbage_collection(current_user_id);
-    
+        file_size = st.st_size;
+    cache_record_delete(path, current_user_id, file_size);
+
+    fh_t *fh = malloc(sizeof(fh_t));
+    int fd = open(cache_path, O_RDWR | O_CREAT, 0644);
+    if (fd < 0) {
+        free(fh);
+        return -errno;
+    }
+    fh->fd = fd;
+    fh->dirty = 1;
+    fi->fh = (uint64_t)(uintptr_t)fh;
+
     return 0;
 }
 
@@ -429,15 +436,6 @@ static int do_open(const char *path, struct fuse_file_info *fi)
             free(fh);
             return rc;
         }
-        int fd = open(cache_path, O_RDWR | O_CREAT, 0644);
-        if (fd < 0) {
-            free(fh);
-            return -errno;
-        }
-
-        fh->fd = fd;
-        fh->dirty = 1;
-        fi->fh = (uint64_t)(uintptr_t)fh;
         return 0;
     }
 
@@ -507,7 +505,7 @@ static int do_open(const char *path, struct fuse_file_info *fi)
     utimensat(AT_FDCWD, cache_path, tv, 0);
 
 
-    /* stash fd in fi->fh */
+    /* stash fh_t in fi->fh */
     int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
     int fd = open(cache_path, flags);
     if (fd < 0) {
@@ -515,18 +513,9 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         unlink(cache_path);
         return -errno;
     }
-
     fh->fd = fd;
-    fh->dirty = 0;
+    fh->dirty = 1;
     fi->fh = (uint64_t)(uintptr_t)fh;
-
-    /* Add to cached history since it's downloaded */
-    off_t size = 0;
-    if (fstat(fd, &st) == 0)
-        size = st.st_size;
-        
-    cache_record_append(path, size, current_user_id);
-    cache_garbage_collection(current_user_id);
     return 0;
 }
 
@@ -534,6 +523,11 @@ static int do_open(const char *path, struct fuse_file_info *fi)
 static int do_release(const char *path, struct fuse_file_info *fi)
 {
     LOGMSG("IN release with path: %s", path);
+    /* Ignore commands or not logged in */
+    if (IS_COMMAND_PATH(path) || !logged_in)
+        return 0;
+
+
     fh_t *fh = (fh_t*)(uintptr_t)fi->fh;
     if (!fh)
         return -EBADF;
@@ -542,31 +536,37 @@ static int do_release(const char *path, struct fuse_file_info *fi)
         fsync(fd);
         close(fd);
     }
-    
-    /* NEVER upload commands or temp files on release */
-    if (IS_COMMAND_PATH(path) || !logged_in || is_temp_path(path) || !fh->dirty)
-        return 0;
 
-    if ((fi->flags & O_ACCMODE) == O_RDONLY)
+    /* skip if file's clean */
+    if (!fh->dirty) {
+        free(fh);
         return 0;
-
+    }
 
     char cache_path[PATH_MAX];
-    snprintf(cache_path, sizeof(cache_path),"%s/.cache/disfs/%d%s",
-            getenv("HOME"), current_user_id, path);
-
-    int returner = upload_file_chunks(current_user_id, path, cache_path);
+    BUILD_CACHE_PATH(cache_path, current_user_id, path);
 
     /* Reconcile cache from history */
     struct stat st;
-    int new_size = 0;
-    if (stat(cache_path, &st) == 0)
-        new_size = st.st_size;
+    off_t file_size = 0;
+    if (stat(cache_path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        free(fh);
+        return 0;
+    }
+    file_size = st.st_size;
+
+    int returner = 0;
+    if (!is_temp_path(path)) {
+        returner = upload_file_chunks(path, current_user_id, cache_path);
+        if (returner != 0) {
+            free(fh);
+            return returner;
+        }
+    }
     
-    /* Try to remove old entry then append the new one */
-    cache_record_delete(path, -1);
-    cache_record_append(path, new_size, current_user_id);
-        
+    /* Update cache records */
+    cache_record_delete(path, current_user_id, -1);
+    cache_record_append(path, file_size, current_user_id);
     cache_garbage_collection(current_user_id);
 
     LOGMSG("leaving release (%d)", returner);
@@ -700,7 +700,7 @@ static int do_unlink(const char *path)
     int size = 0 ;
     if (stat(cache_path, &st) == 0)
         size = st.st_size;
-    if (cache_record_delete(path, size) != 0)
+    if (cache_record_delete(path, current_user_id, size) != 0)
         return -EEXIST;
     if (unlink(cache_path) != 0)
         return -errno;
@@ -745,7 +745,8 @@ static int do_rmdir(const char *path)
     char cache_path[PATH_MAX];
     BUILD_CACHE_PATH(cache_path, current_user_id, path);
     
-    rmdir(cache_path);
+    cache_remove_subtree(path, current_user_id, 
+        CACHE_RM_FILESYSTEM | CACHE_RM_CACHELOGS | CACHE_RM_IGNORE_ENOENT);
 
     return 0;
 }
@@ -869,7 +870,7 @@ static int do_rename(const char *from_path,
         if (stat(newc, &st) == 0)
             delete_size = st.st_size;
 
-        cache_record_delete(to_path, delete_size);
+        cache_record_delete(to_path, current_user_id, delete_size);
 
         dest_exists = 0;  // not used currently, but kept anyways   
     }
@@ -919,10 +920,13 @@ static int do_rename(const char *from_path,
        - NON-TEMP: rename existing record from from_path -> to_path
     */
     if (from_is_temp) {
-        rc = upload_file_chunks(current_user_id, to_path, newc);
+        rc = upload_file_chunks(to_path, current_user_id, newc);
         if (rc)
             return rc;
 
+        // only touch cache if it's a file
+        struct stat st;
+        if (stat(newc, &st) == 0 && S_ISREG(st.st_mode))
         cache_record_append(to_path, source_size, current_user_id);
         cache_garbage_collection(current_user_id);
     } else {
@@ -976,7 +980,11 @@ static int do_utimens(const char *path, const struct timespec tv[2], struct fuse
 }
 
 void *do_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
-    cache_init();
+    LOGMSG("STARTING do_init");
+    if(cache_init() != 0) {
+        fprintf(stderr, "Cache failed to initialized.\n");
+        abort();
+    }
     return NULL;
 }
 

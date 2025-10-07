@@ -18,3 +18,4 @@ mnt/
 .vscode/
 .env
 logs.txt
+cache_status.txt

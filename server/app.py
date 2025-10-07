@@ -5,7 +5,7 @@ import os
 from discord import File
 from quart import Quart, request, jsonify, Response
 from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS
-from server.discord_api import get_client
+from server.discord_api import get_client, delete_messages
 import asyncpg
 import tempfile
 
@@ -463,6 +463,7 @@ async def truncate_file():
 async def unlink():
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path")
+    channel = discord_client.get_channel(discord_client.channel_id)
 
     async with POOL.acquire() as conn:
         node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
@@ -473,42 +474,44 @@ async def unlink():
         rows = await conn.fetch(
             "SELECT message_id FROM file_chunks WHERE node_id=$1",
               node_id)
-        channel = discord_client.get_channel(discord_client.channel_id)
 
-        for r in rows:
-            try:
-                msg = await channel.fetch_message(r["message_id"])
-                await msg.delete()
-            except Exception:
-                app.logger.exception(
-                    f"failed to delete chunk on discord, raw_path from fuse:{raw_path}")
+    
+    message_ids = [r["message_id"] for r in rows if r["message_id"] is not None]
+    await delete_messages(channel, message_ids)
 
-        await conn.execute(
-            "DELETE FROM nodes WHERE id=$1", node_id
-        )
-    return '', 201
+    async with POOL.acquire() as conn, conn.transaction():
+        await conn.execute("DELETE FROM nodes WHERE id = $1", node_id)
+    return "", 201
 
 
 @app.route("/rmdir", methods=["POST"])
 async def rmdir():
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path")
+    channel = discord_client.get_channel(discord_client.channel_id)
 
     async with POOL.acquire() as conn:
-        # ensure dir is empty
         dir_id = await resolve_node(conn, user_id, raw_path, expected_type=2)
-
         if not dir_id:
             return "", 520
-    
-        child = await conn.fetchval(
-            "SELECT 1 FROM nodes WHERE parent_id=$1 LIMIT 1", dir_id
-        )
-        if child:
-            return "", 404
+        
+        rows = await conn.fetch("""
+            SELECT file_chunks.message_id
+            FROM node_closure
+            JOIN nodes ON nodes.id = node_closure.descendant
+            JOIN file_chunks ON file_chunks.node_id = nodes.id
+            WHERE node_closure.ancestor = $1
+            AND nodes.type = 1
+        """, dir_id)
 
-        await conn.execute("DELETE FROM nodes WHERE id=$1", dir_id)
-    return '', 201
+    message_ids = [r["message_id"] for r in rows if r["message_id"] is not None]
+    await delete_messages(channel, message_ids)
+
+    async with POOL.acquire() as conn, conn.transaction():
+        await conn.execute("DELETE FROM nodes WHERE id = $1", dir_id)
+    return "", 201
+    
+        
 
 
 # Simply, rename.

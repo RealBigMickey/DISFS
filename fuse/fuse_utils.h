@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "server_config.h"
+#include "cache_manage.h" 
 #include "debug.h"
 
 #define URL_MAX 512
@@ -54,7 +55,7 @@ int http_post_stream(const char *url, const void *data, size_t len, uint32_t *st
 char *url_encode(const char* path);
 void mkdir_p(const char *dir);
 
-int upload_file_chunks(int current_user_id, const char *logical_path, const char *cache_path);
+int upload_file_chunks(const char *logical_path, int current_user_id, const char *cache_path);
 
 
 int backend_unlink(int current_user_id, const char *path);

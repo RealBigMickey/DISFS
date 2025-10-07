@@ -201,7 +201,7 @@ int backend_unlink(int current_user_id, const char *path) {
 }
 
 /* uploads the file at cache_path to the server backend */
-int upload_file_chunks(int current_user_id, const char *logical_path, const char *cache_path) {
+int upload_file_chunks(const char *logical_path, int current_user_id, const char *cache_path) {
     FILE *fp = fopen(cache_path, "rb");
     if (!fp)
         return -EIO;
