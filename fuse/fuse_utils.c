@@ -4,6 +4,7 @@
 #include <libgen.h>
 
 
+
 // size = size of each member, nmemb = number of members
 size_t write_cb(void *data, size_t size, size_t nmemb, void *userp)
 {
@@ -272,7 +273,7 @@ int backend_exists(int current_user_id, const char *path, int *exists_out) {
 
 
 int cache_swap(const char *a, const char *b) {
-#if defined(RENAME_EXCHANGE) && defined(SYS_renameat2)
+#if defined(RENAME_EXCHANGE)
     if (renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE) == 0)
         return 0;
     return -errno;

@@ -9,7 +9,6 @@
 #include <libgen.h>
 #include <cjson/cJSON.h>
 #include <linux/fs.h>
-#include <fcntl.h>
 
 #include "fuse_utils.h"
 #include "server_config.h"
@@ -238,17 +237,16 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     logged_in = 1;
                     free(resp.ptr);
                     LOGMSG("Registered/logged in now! :D");
-                    return snprintf(buf, size, "Registered and Logged in as \"%s\"\n", name);
+                    return snprintf(buf, size, "Registered and Logged in as \"%s\".\n", name);
                 }
                 free(resp.ptr);
-                return snprintf(buf, size, "Failed to login. (No http response)\n");
+                return snprintf(buf, size, "Failed to login. (No http response).\n");
             } else {
                 free(resp.ptr);
                 return snprintf(buf, size, "Failed to login.\n");
             }
         }
-        else if (!logged_in && 
-          strncmp(path, CSTR_LEN("/.command/ping/")) == 0) {
+        else if (strncmp(path, CSTR_LEN("/.command/ping/")) == 0) {
             const char *username = path + sizeof("/.command/ping/") - 1;
  
             char url[URL_MAX];
@@ -266,11 +264,11 @@ static int do_read(const char *path, char *buf, size_t size, off_t offset,
                     logged_in = 1;
                     free(resp.ptr);
                     LOGMSG("logged in now! :D");
-                    return snprintf(buf, size, "Logged in as \"%s\"\n", name);
+                    return snprintf(buf, size, "Logged in as \"%s\".\n", name);
                 }
             }
             free(resp.ptr);
-            return snprintf(buf, size, "Failed to login.\n");
+            return snprintf(buf, size, "Failed to login as \"%s\".\n", username);
         }
 
         if (logged_in && strncmp(path, CSTR_LEN("/.command/pong")) == 0) {
@@ -460,6 +458,7 @@ static int do_open(const char *path, struct fuse_file_info *fi)
             return 0;
         }
         LOGMSG("cache miss! (diff mtime), hitting '/download' route...");
+        LOGMSG("\"%ld\" and \"%ld\"", (long)st.st_mtime, (long)remote_mtme);
     }
 
     /* Download from server otherwise */
@@ -493,16 +492,6 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         return -ECOMM;
     }
     fclose(fp);
-
-    /* Set mtime of local to local cache file */
-    if (!remote_mtme)
-        remote_mtme = fetch_mtime(path, current_user_id);
-
-    struct timespec tv[2] = {0};
-    tv[0].tv_nsec = UTIME_OMIT;
-    tv[1].tv_sec = remote_mtme;
-    tv[1].tv_nsec = 0;
-    utimensat(AT_FDCWD, cache_path, tv, 0);
 
 
     /* stash fh_t in fi->fh */
@@ -627,6 +616,8 @@ static int do_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if (status != 201)
         return -EIO;
 
+    cache_record_append(path, 0, current_user_id);
+
 
     int fd = open(cache_path, O_RDWR | O_CREAT | O_TRUNC, mode & 0777);
     if (fd < 0)
@@ -701,7 +692,8 @@ static int do_unlink(const char *path)
     if (stat(cache_path, &st) == 0)
         size = st.st_size;
     if (cache_record_delete(path, current_user_id, size) != 0)
-        return -EEXIST;
+        // File might not be cached locally
+        // return -EEXIST;
     if (unlink(cache_path) != 0)
         return -errno;
 
@@ -772,7 +764,7 @@ static int do_rename(const char *from_path,
 
     const char *home_path = getenv("HOME");
     if (!home_path)
-        return -EIO;
+        return -ENOENT;
 
     char oldc[PATH_MAX], newc[PATH_MAX];
     BUILD_CACHE_PATH(oldc, current_user_id, from_path);
@@ -938,6 +930,7 @@ static int do_rename(const char *from_path,
 
 
 static int do_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+    LOGMSG("IN utimens");
     if (!logged_in || IS_COMMAND_PATH(path))
         return -EACCES;
     

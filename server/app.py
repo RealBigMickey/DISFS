@@ -8,6 +8,7 @@ from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS
 from server.discord_api import get_client, delete_messages
 import asyncpg
 import tempfile
+from asyncpg.exceptions import UniqueViolationError
 
 from server.app_utils import validate_user, dispatch_upload, admin_console, create_closure, resolve_node, split_parent_and_name, node_info, is_descendant, get_parent_id, rewire_closure_for_move
 
@@ -630,24 +631,29 @@ async def rename_swap():
         
         if a_row["type"] != b_row["type"]:
             return "Cannot swap conflicting types! (dir & file)", 400
+
         a_parent_id, b_parent_id = a_row["parent_id"], b_row["parent_id"]
         a_name, b_name = a_row["name"], b_row["name"]
+        a_id, b_id = a_row["id"], b_row["id"]
 
-
-        # Check for thrid party name conflicts
+        # Check for third party name conflicts
+        # Where another node that isn't A or B exist at the destination
         conflict1 = await conn.fetchval(
             """
-            SELECT 1 FROM nodes
-              WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id<>$4
-            """, user_id, a_parent_id, b_name, a_row["id"]
+            SELECT id FROM nodes
+            WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id <> $4 AND id <> $5
+            """, user_id, a_parent_id, b_name, a_id, b_id
         )
-        conbflict2 = await conn.fetchval(
+        conflict2 = await conn.fetchval(
             """
-            SELECT 1 FROM nodes
-              WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id<>$4
-            """, user_id, b_parent_id, a_name, b_row["id"]
+            SELECT id FROM nodes
+            WHERE user_id=$1 AND parent_id=$2 AND name=$3 AND id <> $4 AND id <> $5
+            """, user_id, b_parent_id, a_name, a_id, b_id
         )
-        if conflict1 or conbflict2:
+        
+        print(f"DEBUG: conflict1={conflict1}, conflict2={conflict2}")
+        
+        if conflict1 or conflict2:
             return "Destination exists", 409
 
         # Defer uniqueness for mid-statement collision

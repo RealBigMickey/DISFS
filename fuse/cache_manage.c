@@ -226,7 +226,7 @@ void cache_exit(void) {
 int cache_record_append(const char *path, off_t size, int current_user_id) {
     char cache_path[PATH_MAX];
     BUILD_CACHE_PATH(cache_path, current_user_id, path);
-    LOGMSG("[GC] appending user %d's cache %s", current_user_id, path);
+    LOGMSG("[GC] Appending cache: %s", cache_path);
 
     MUTEX_LOCK(cache_lock);
 
@@ -292,7 +292,7 @@ int cache_record_delete(const char *path, int current_user_id, off_t size) {
     if (size < 0)
         return _cache_record_delete_no_size(full_path);
     
-    LOGMSG("[GC] deleting cache %s", full_path);
+    LOGMSG("[GC] Deleting cache: %s", full_path);
 
     MUTEX_LOCK(cache_lock);
 
