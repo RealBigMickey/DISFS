@@ -202,55 +202,85 @@ int backend_unlink(int current_user_id, const char *path) {
 }
 
 /* uploads the file at cache_path to the server backend */
-int upload_file_chunks(const char *logical_path, int current_user_id, const char *cache_path) {
+int upload_file_chunks(const char *logical_path, int current_user_id, size_t size, const char *cache_path) {
     FILE *fp = fopen(cache_path, "rb");
     if (!fp)
         return -EIO;
 
+    /* In case of empty files, somehow */
+    int total_chunks = (size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    int end_chunk = total_chunks > 0 ? total_chunks - 1 : 0;
+
+
+    char *esc = url_encode(logical_path);
+    if (!esc) {
+        fclose(fp);
+        return -EIO;
+    }
+
+    char url[URL_MAX];
+    snprintf(url, sizeof(url),
+            "http://%s/prep_upload?user_id=%d&path=%s&size=%ld&end_chunk=%d",
+            get_server_ip(), current_user_id, esc, (long)size, end_chunk);
+    curl_free(esc);
+
+    uint32_t status = 0;
+    if (http_post_status(url, &status) != 0) {
+        fclose(fp);
+        return -ECOMM;
+    }
+    if (status != 201) {
+        fclose(fp);
+        return -EIO;
+    }
+
+    /* Allocate chunk buffer */
     void *chunk_buf = malloc(CHUNK_SIZE);
-    if (!chunk_buf){
+    if (!chunk_buf) {
         fclose(fp);
         return -ENOMEM;
     }
 
-
+    /* Upload chunks sequentially */
     int returner = 0;
     int chunk = 0;
     size_t n;
     while ((n = fread(chunk_buf, 1, CHUNK_SIZE, fp)) > 0) {
-        LOGMSG("We CHUNKIN'");
-        char *esc = url_encode(logical_path);
+        LOGMSG("Uploading chunk %d/%d", chunk, end_chunk);
+        
+        esc = url_encode(logical_path);
         if (!esc) {
             returner = -EIO;
             break;
         }
-            
 
-        char url[URL_MAX];
         snprintf(url, sizeof(url),
                 "http://%s/upload?user_id=%d&path=%s&chunk=%d",
                 get_server_ip(), current_user_id, esc, chunk);
         curl_free(esc);
 
-        uint32_t status = 0;
-        if (http_post_stream(url, chunk_buf, n, &status) != 0)
+        status = 0;
+        if (http_post_stream(url, chunk_buf, n, &status) != 0) {
             returner = -ECOMM;
+            break;
+        }
 
-        LOGMSG("RELEASE STATUS: %d", status);
+        LOGMSG("Chunk %d upload status: %d", chunk, status);
         
         if (status != 201) {
             returner = -EIO;
             break;
         }
 
-
         chunk++;
     }
+    
     free(chunk_buf);
     fclose(fp);
 
     return returner;
 }
+
 
 
 int backend_exists(int current_user_id, const char *path, int *exists_out) {

@@ -1,10 +1,8 @@
 import asyncio
 import time
-import aioconsole
 import os
-from discord import File
 from quart import Quart, request, jsonify, Response
-from server._config import TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS
+from server._config import DATABASE_URL, TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS, FILE_CHUNK_TIMEOUT
 from server.discord_api import get_client, delete_messages
 import asyncpg
 import tempfile
@@ -15,7 +13,7 @@ from server.app_utils import validate_user, dispatch_upload, admin_console, crea
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from dummySQL import seed_dummy_data, seed_foo_txt
+from dummySQL import seed_foo_txt
 
 
 # Note: http return error messages are ignored for now
@@ -35,6 +33,25 @@ CURRENT_USERNAME = ""
 async def startup():
     global POOL
 
+    # Create database if it doesn't exist
+    try:
+        base_url = DATABASE_URL.rsplit('/', 1)[0]
+        admin_url = f"{base_url}/postgres"
+        
+        admin_pool = await asyncpg.create_pool(admin_url)
+        async with admin_pool.acquire() as conn:
+            # Check if database exists
+            exists = await conn.fetchval(
+                "SELECT 1 FROM pg_database WHERE datname = 'disfs_db'"
+            )
+            if not exists:
+                await conn.execute("CREATE DATABASE disfs_db OWNER admin")
+                app.logger.info("Created database disfs_db")
+        await admin_pool.close()
+    except Exception as e:
+        app.logger.error(f"Failed to create database: {e}")
+
+    # Actually connect to disfs_db
     POOL = await asyncpg.create_pool(DATABASE_URL)
 
     schema = open("schema.sql").read()
@@ -102,6 +119,73 @@ async def login():
     return f"{row['id']}:{username}\n", 201, {"Content-Type": "text/plain"}
 
 
+# Track upload completion: {node_id: (end_chunk_index, event)}
+# Keeps an asyncio.Event to avoid busy waiting
+upload_tracking: dict[int, tuple[int, asyncio.Event]] = {}
+
+@app.route("/prep_upload", methods=["POST"])
+async def prep_upload():
+    """
+    Called by do_release to prepare for upload.
+    POST /prep_upload?user_id=22&path=foo/bar.txt&size=1048576&end_chunk=2
+    """
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    size = request.args.get("size", "0")
+    end_chunk = request.args.get("end_chunk", "0")
+    
+    if not raw_path:
+        return "Missing path", 400
+    
+    try:
+        size = int(size)
+        end_chunk = int(end_chunk)
+    except ValueError:
+        return "Invalid size or end_chunk", 400
+
+    async with POOL.acquire() as conn, conn.transaction():
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
+        if not node_id:
+            return "File not found", 520
+
+
+       # Overwrite on-going uploads of same file and delete stale chunks
+       # Current reader's will timeout
+        if node_id in upload_tracking:
+            old_end_chunk, old_event = upload_tracking[node_id]
+            
+            print(f"Interrupting ongoing upload for node_id={node_id}"
+                  f"(old end_chunk={old_end_chunk}, new end_chunk={end_chunk})")
+            
+            old_chunks = await conn.fetch("SELECT message_id FROM file_chunks WHERE node_id=$1",node_id)
+            
+            await conn.execute("DELETE FROM file_chunks WHERE node_id=$1", node_id)
+            message_ids = [r["message_id"] for r in old_chunks if r["message_id"] is not None]
+            channel = discord_client.get_channel(discord_client.channel_id)
+            delete_messages(channel, message_ids)
+            
+        
+        # Set size and mark as not ready
+        await conn.execute(
+            """
+            UPDATE nodes 
+            SET size = $1, 
+                ready = FALSE,
+                i_mtime = $2
+            WHERE id = $3
+            """,
+            size, int(time.time()), node_id
+        )
+        
+
+        if node_id not in upload_tracking:
+            upload_tracking[node_id] = (end_chunk, asyncio.Event())
+        else:
+            old_event = upload_tracking[node_id][1]
+            old_event.clear()
+            upload_tracking[node_id] = (end_chunk, old_event)
+    
+    return "", 201
 
 
 @app.route("/upload", methods=["POST"])
@@ -117,7 +201,7 @@ async def upload():
         return "Missing path", 400
 
     try:
-        chunk = int(request.args.get("chunk", ""))
+        chunk = int(request.args.get("chunk"))
     except ValueError:
         return "Invalid chunk index", 400
     
@@ -139,6 +223,20 @@ async def upload():
             chunk, chunk_size,
             tmp.name
         )
+
+         # Check if this is the end chunk
+        async with POOL.acquire() as conn:
+            node_id = await resolve_node(conn, user_id, file_path, expected_type=1)
+            if not node_id:
+                return "File not found", 520
+            
+
+            if node_id in upload_tracking:
+                end_chunk, event = upload_tracking[node_id]
+                if chunk == end_chunk:
+                    await conn.execute("UPDATE nodes SET ready = TRUE WHERE id = $1", node_id)
+                    event.set()  # set the asyncio.Event
+
     except Exception:
         app.logger.exception("dispatch_upload failed")
         return "Upload failed", 500
@@ -156,7 +254,6 @@ async def stat():
         return jsonify({"type": 2, "atime": now, "mtime": now,
                         "ctime": now, "crtime": now})
     
-    parts = raw_path.split("/")
     async with POOL.acquire() as conn:
         node_id = await resolve_node(conn, user_id, raw_path, expected_type=None)
 
@@ -165,7 +262,8 @@ async def stat():
 
         node_row = await conn.fetchrow(
             """
-            SELECT type, i_atime, i_mtime, i_ctime, i_crtime
+            SELECT type, i_atime, i_mtime, i_ctime, i_crtime, 
+                   size, ready
             FROM nodes WHERE id=$1
             """, node_id)
 
@@ -178,12 +276,8 @@ async def stat():
         }
 
         if node_row["type"] == 1:
-            size = await conn.fetchval(
-            """
-            SELECT COALESCE(SUM(chunk_size), 0)
-            FROM file_chunks WHERE node_id=$1
-            """, node_id)
-            result["size"] = size
+            result["size"] = node_row["size"]
+            result["ready"] = node_row["ready"]
 
     return jsonify(result), 201
 
@@ -329,6 +423,40 @@ async def mkdir():
 
     return "", 201
 
+@app.route("/wait_ready", methods=["GET"])
+async def wait_ready():
+    """
+    Blocks until file is ready (all chunks uploaded).
+    GET /wait_ready?user_id=22&path=foo/bar.txt
+    """
+    user_id = await validate_user(POOL)
+    raw_path = request.args.get("path", "").lstrip("/")
+    timeout = FILE_CHUNK_TIMEOUT
+    
+    if not raw_path:
+        return "Missing path", 400
+    
+    async with POOL.acquire() as conn:
+        node_id = await resolve_node(conn, user_id, raw_path, expected_type=1)
+        if not node_id:
+            return "File not found", 520
+    
+        ready = await conn.fetchval("SELECT ready FROM nodes WHERE id = $1",node_id)
+        if ready:
+            return "", 201
+        
+        if node_id not in upload_tracking:
+            return "No upload in progress", 400
+        
+        _, event = upload_tracking[node_id]
+    
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return "", 201
+    except asyncio.TimeoutError:
+        return "Upload timeout", 408
+
+
 @app.route("/download", methods=["GET"])
 async def download():
     user_id = await validate_user(POOL)
@@ -365,11 +493,10 @@ async def download():
 @app.route("/create", methods=["POST"])
 async def create_file():
     user_id = await validate_user(POOL)
-    raw_path = request.args.get("path", "").lstrip("/");
+    raw_path = request.args.get("path", "").lstrip("/")
 
     if not raw_path:
         return "", 400
-    
     parts = raw_path.split("/")
     file_name = parts.pop()
     now = int(time.time())
@@ -403,7 +530,7 @@ async def create_file():
 
 
 
-        # just in case the file DOES exist
+        # Just in case the file DOES exist
         check_exists = await conn.fetchval(
             """
             SELECT 1 FROM nodes
@@ -619,6 +746,31 @@ async def rename_swap():
         return "", 201
 
     async with POOL.acquire() as conn, conn.transaction():
+        a_node_id = await resolve_node(conn, user_id, a_path, expected_type=None)
+        b_node_id = await resolve_node(conn, user_id, b_path, expected_type=None)
+        if not a_node_id or not b_node_id:
+            return "Destination(s) doesn't exists", 520
+
+        # Check if files are ready
+        a_ready = await conn.fetchval("SELECT ready FROM nodes WHERE id=$1", a_node_id)
+        b_ready = await conn.fetchval("SELECT ready FROM nodes WHERE id=$1", b_node_id)
+    
+        # If either file is not ready, wait for uploads to complete
+        if not a_ready and a_node_id in upload_tracking:
+            _, a_event = upload_tracking[a_node_id]
+            try:
+                await asyncio.wait_for(a_event.wait(), timeout=FILE_CHUNK_TIMEOUT)
+            except asyncio.TimeoutError:
+                return "Upload timeout for file A", 408
+        
+        if not b_ready and b_node_id in upload_tracking:
+            _, b_event = upload_tracking[b_node_id]
+            try:
+                await asyncio.wait_for(b_event.wait(), timeout=FILE_CHUNK_TIMEOUT)
+            except asyncio.TimeoutError:
+                return "Upload timeout for file B", 408
+    
+
         a_row = await node_info(conn, user_id, a_path)
         b_row = await node_info(conn, user_id, b_path)
         if not b_row or not a_row:

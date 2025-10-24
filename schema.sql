@@ -10,10 +10,11 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS nodes (
   id         SERIAL PRIMARY KEY,
   user_id    INT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name       TEXT   NOT NULL CHECK (length(name) > 0 AND position('/' IN name) = 0),  -- make sure name's valid
+  name       TEXT   NOT NULL CHECK (position('/' IN name) = 0),  -- make sure name's valid
   parent_id  INT    REFERENCES nodes(id) ON DELETE CASCADE,  
   type       SMALLINT NOT NULL,  -- 1=file, 2=folder
   size       BIGINT NOT NULL DEFAULT 0,
+  ready      BOOLEAN NOT NULL DEFAULT FALSE,
   i_atime    BIGINT,
   i_mtime    BIGINT NOT NULL DEFAULT 0,
   i_ctime    BIGINT,

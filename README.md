@@ -99,25 +99,35 @@ Type `exit`, `q`, `quit` to exit server.
 
 
 ## 📚 Quick Start – Database
-DISFS requires a PostgreSQL database. 
-Install with:
+
+DISFS requires a PostgreSQL database.
+
+### 1. Install PostgreSQL
+
 ```bash
 sudo apt install postgresql postgresql-contrib
 ```
 
-Set the connection string in your `.env`:
-```bash
-# recall this line
-DATABASE_URL="postgresql://user:pass@localhost/disfs"
+### 2. Set up the database
+Create user like so:
 ```
-
-Choose your own names, an example database would be:
-```sql
-CREATE USER admin WITH PASSWORD 'password';
+sudo -i -u postgres psql << EOF
+CREATE USER admin WITH PASSWORD 'password' CREATEDB;
 CREATE DATABASE disfs_db OWNER admin;
-GRANT ALL PRIVILEGES ON DATABASE disfs_db TO admin;
+\q
+EOF
 ```
 
+3. Configure the `.env`:
+Create a .env file in the project root.
+Set up the username and password like you have in step 2
+```bash
+# Modify the URL
+DATABASE_URL="postgres://admin:password@localhost:5432/disfs_db"
+DISCORD_TOKEN="your_discord_bot_token_here"
+```
+
+That's it! When you run the server, the necessary tables will be automatically created.
 
 ---
 ## 🗄 Metadata & Storage

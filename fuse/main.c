@@ -546,7 +546,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
 
     int returner = 0;
     if (!is_temp_path(path)) {
-        returner = upload_file_chunks(path, current_user_id, cache_path);
+        returner = upload_file_chunks(path, current_user_id, file_size, cache_path);
         if (returner != 0) {
             free(fh);
             return returner;
@@ -912,7 +912,7 @@ static int do_rename(const char *from_path,
        - NON-TEMP: rename existing record from from_path -> to_path
     */
     if (from_is_temp) {
-        rc = upload_file_chunks(to_path, current_user_id, newc);
+        rc = upload_file_chunks(to_path, current_user_id, source_size, newc);
         if (rc)
             return rc;
 

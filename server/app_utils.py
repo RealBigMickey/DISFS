@@ -133,7 +133,7 @@ async def admin_console(discord_client, app):
 async def node_info(conn, user_id: int, path: str):
     """
     Resolves node info from path, returns entire ROW
-    -> (id, user_id, name, parent_id, type, message_id,
+    -> (id, user_id, name, parent_id, type,
         i_atime, i_mtime, i_ctime, i_crtime)
     or None if not found
     """
@@ -169,7 +169,7 @@ async def node_info(conn, user_id: int, path: str):
     
     full_row = await conn.fetchrow(
         """
-        SELECT id, user_id, name, parent_id, type, message_id,
+        SELECT id, user_id, name, parent_id, type,
           i_atime, i_mtime, i_ctime, i_crtime FROM nodes WHERE id=$1
         """, node_id
     )

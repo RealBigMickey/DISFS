@@ -32,8 +32,9 @@ LDFLAGS = `pkg-config fuse3 --libs` -lcurl -lcjson
 
 TESTS_NAMES = \
     01_setup.sh 02_upload_download.sh 03_stat_mtime.sh \
-    04_listdir_order.sh 05_rename_same_dir.sh 06_rename_move_cross_dir.sh \
-    07_swap.sh 08_truncate_unlink.sh 09_rmdir.sh 10_fs_walk_on_mount.sh
+    04_listdir.sh 05_rename_in_place.sh 06_rename_dirs_move.sh \
+    07_swap.sh 08_truncate_unlink.sh 09_rmdir.sh 10_empty_files.sh \
+	11_overwrite.sh 12_large_files.sh
 
 TESTS := $(addprefix tests/,$(TESTS_NAMES))
 
@@ -56,23 +57,31 @@ clean:
 mount:
 	@mkdir -p mnt
 	@rm -f logs.txt
-	@fusermount3 -uz mnt 2>/dev/null || true
-	@sleep 0.1
-	@./$(TARGET) mnt &
-	@sleep 0.1
+	@if mountpoint -q mnt; then \
+	    echo "mnt already mounted — skipping mount."; \
+	else \
+	    ./$(TARGET) mnt & \
+	    sleep 0.1; \
+	fi
+
 
 unmount:
 # clear cache folder on unmount just in-case
 	@rm -rf $(HOME)/.cache/disfs/
 	@fusermount3 -uz mnt 2>/dev/null || true
 
-tests: all
-	@echo "Running tests..."
+test: all
+	@echo "Running all tests..."
 	@set -e; \
 	for t in $(TESTS); do \
 	    echo "==> $$t"; \
 	    bash "$$t"; \
 	done
 	@echo "All tests passed!"
+
+test-%: all
+	@echo "Running test $*..."
+	@bash tests/$*.sh
+
 # Declare commands
 .PHONY: all clean mount unmount test
