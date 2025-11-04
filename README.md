@@ -1,5 +1,5 @@
 # DISFS – A FUSE File System on Top of the Discord CDN
-> *⚠️ **Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*
+> ***Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*
 > *It uses the Discord CDN solely for research and educational purposes.*
 
 
@@ -17,7 +17,7 @@ Inspired by GNU naming, **DISFS = “DISFS Is a Service File System.”**
 
 ---
 
-## ✨ Features
+## Features
 
 |    | Feature                        | Details                                                                                      |
 | -- | ------------------------------ | -------------------------------------------------------------------------------------------- |
@@ -29,7 +29,7 @@ Inspired by GNU naming, **DISFS = “DISFS Is a Service File System.”**
 
 ---
 
-## 🚀 Quick Start – FUSE Client
+## Quick Start – FUSE Client
 
 ### 1) Clone
 
@@ -62,7 +62,7 @@ make clean   # Clean + unmount
 
 ---
 
-## ⚙️ Quick Start – Server backend
+## Quick Start – Server backend
 /* For those who wish to run their own server */
 
 #### 1) Python dependencies
@@ -130,7 +130,7 @@ DISCORD_TOKEN="your_discord_bot_token_here"
 That's it! When you run the server, the necessary tables will be automatically created.
 
 ---
-## 🗄 Metadata & Storage
+## Metadata & Storage
 
 - **Database:** PostgreSQL
 
@@ -147,13 +147,13 @@ psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTAR
 ```
 
 --- 
-### 📌 Changelog
+### Changelog
 
 v0.1: First working release (basic FUSE FS + Discord backend).  
 v0.2: Added first version of cache control (local cache directory + eviction logic).  
 
 
-### ⚠️ Known Limitations / TODO
+### Known Limitations / TODO
 - No per-user encryption yet (planned: AES-GCM chunk layer).
 - All files currently in a single Discord channel → needs sharding by hash prefix.
 - Still using synchronous libcurl in the FUSE path → plan to migrate to fully async.
