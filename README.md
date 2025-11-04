@@ -1,6 +1,7 @@
 # DISFS – A FUSE File System on Top of the Discord CDN
-> ***Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*
-> *It uses the Discord CDN solely for research and educational purposes.*
+> ***Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*  
+> *It uses the Discord CDN solely for research and educational purposes.*  
+> *Tests aren't fully implemented yet, and file downloads currently don't block.*   WIP
 
 
 **DISFS** turns Discord into a mountable POSIX file system.  
@@ -98,7 +99,7 @@ Type `exit`, `q`, `quit` to exit server.
 `dog` to send a dog gif to notification server! 
 
 
-## 📚 Quick Start – Database
+## Quick Start – Database
 
 DISFS requires a PostgreSQL database.
 
@@ -161,7 +162,7 @@ v0.2: Added first version of cache control (local cache directory + eviction log
 - No chunk integrity verification.
 
 
-### 🔮 Roadmap
+### Roadmap
 - [ ] Cache record system
 - [ ] Cache version control, only downloading new cache when stale
 - [ ] Add encryption layer (AES-GCM per user)
