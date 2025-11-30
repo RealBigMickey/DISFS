@@ -12,7 +12,7 @@ A passion project of mine •~•.
 - Server side: **Python (Quart + PostgreSQL)**  
 
 
-Inspired by GNU naming, **DISFS = “DISFS Is a Service File System.”**  
+Inspired by GNU naming, **DISFS = “DISFS Is a Service File System”**  
 
 <img src="https://raw.githubusercontent.com/RealBigMickey/Freshman-projects/main/2025-11-30%2023-48-26~2.gif" width="600">
 
@@ -40,13 +40,9 @@ sudo apt update
 sudo apt install libfuse3-dev libcurl4-openssl-dev libcjson-dev
 ```
 
-### 3) On Debian/Ubuntu, Build & Run:
-
+### 3) Make it
 ```bash
-make         # Builds + unmount + mounts
-make mount   # Mount only
-make unmount # Unmount only
-make clean   # Clean + unmount
+$ make
 ```
 
 ---
@@ -66,10 +62,10 @@ pip install -r requirements.txt
 ```bash
 DATABASE_URL="postgresql://user:pass@localhost/disfs"
 TOKEN="YOUR_DISCORD_BOT_TOKEN"
-# Feel free to change url, though other changes may be necessary
-# Get your bot token from: https://discord.com/developers/
+# Feel free to change url, though other modifications may be necessary for it to work
+# Get a bot token from: https://discord.com/developers/
 ```
-> *Sadly, details on Discord Bot's setup won't be provided here*  
+> *Sadly, details on Discord Bot's setup won't be provided by me*  
 
 #### 3) Configure server/_config.py
 ```python
@@ -83,13 +79,13 @@ VAULT_IDS = [YOUR_NOTIFICATION_CHANNEL_ID]       # Your Discord channel ID
 python3 -m server.main
 ```
 
-Type `exit`, `q`, `quit` to exit server.
-`dog` to send a dog gif to notification server! 
+Type `exit`, `q`, `quit` to exit server
+`dog` to send a dog gif to notification server
 
 ---
 
 ## Quick Start – Database
-DISFS requires a PostgreSQL database.
+DISFS requires a PostgreSQL database
 
 ### 1. Install PostgreSQL
 ```bash
@@ -97,7 +93,7 @@ sudo apt install postgresql postgresql-contrib
 ```
 
 ### 2. Set up the database
-Create a user like so:
+Create a user with:
 ```
 sudo -i -u postgres psql << EOF
 CREATE USER admin WITH PASSWORD 'password' CREATEDB;
@@ -107,8 +103,7 @@ EOF
 ```
 
 ### 3. Configure the `.env`:
-Create a .env file in the project root.
-Set up the username and password like you have in step 2
+Create a .env file in the project root. Set up the username and password like you have in step 2.
 ```bash
 # Modify the URL
 DATABASE_URL="postgres://admin:password@localhost:5432/disfs_db"
@@ -124,18 +119,31 @@ psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTAR
 ```
 --- 
 ### Usage
-Use `.command` prefix to access commands.
-cat -> do said thing
-ls -> see command list
+By default, DISFS always mounts to DISFS/mnt
+```bash
+$ make  # makes and mounts fuse
+$ make mount    # mounts fuse
+$ make unmount  # unmounts fuse
+$ make clean    # cleans and unmounts
+```
+Use `.command` prefix to access commands.  
+`cat` -> do said thing   
+`ls` -> see command list   
 
-For example, by default there should be the user William:
+Run tests and test features quickly with
+```bash
+$ make test
+```
+
+#### Trying it yourself
+By default there should be the user William:
 ```bash
 $ ls mnt/.command   # Command list
 $ cat mnt/.command/register/Arthur  # Register user 'Arthur'
 $ cat mnt/.command/pong # Logout
 $ cat mnt/.command/serverip/192.0.2.123 # Change IP if the server isn't on local
 ```
-Once logged in, use it as if a standard directory!
+Once mounted and logged in, use it as if a standard directory.
 
 ### Changelog
 
