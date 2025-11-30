@@ -346,7 +346,7 @@ static int do_mkdir(const char *path, mode_t mode)
 
 static int do_truncate(const char *path, off_t size, struct fuse_file_info *fi)
 {
-    // Using %jd and casting to intmax_t makes sure the numbers are consistant across platforms
+    // Using %jd and casting to intmax_t uses the largest safe integer
     LOGMSG("IN TRUNCATE path=%s, &size=%jd", path, (intmax_t)size);
     if (!logged_in)
         return -EACCES;
@@ -437,14 +437,14 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         return 0;
     }
 
-    time_t remote_mtme = 0;
+    time_t remote_mtime = 0;
     struct stat st;
-    /* Check if cache exists && mtime == mtime on the server's side*/
+    /* Check if cache exists && mtime == mtime on the server's side */
     if (access(cache_path, F_OK) == 0 &&
         stat(cache_path, &st) == 0) {
-        remote_mtme = fetch_mtime(path, current_user_id);
+        remote_mtime = fetch_mtime(path, current_user_id);
 
-        if (st.st_mtime == remote_mtme) {
+        if (st.st_mtime == remote_mtime) {
             int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
             int fd = open(cache_path, flags);
             if (fd < 0) {
@@ -458,9 +458,11 @@ static int do_open(const char *path, struct fuse_file_info *fi)
             return 0;
         }
         LOGMSG("cache miss! (diff mtime), hitting '/download' route...");
-        LOGMSG("\"%ld\" and \"%ld\"", (long)st.st_mtime, (long)remote_mtme);
+        LOGMSG("\"%ld\" and \"%ld\"", (long)st.st_mtime, (long)remote_mtime);
+    } else {
+        LOGMSG("cache miss! (doesn't exist), hitting '/download' route...");
     }
-
+    
     /* Download from server otherwise */
     char *dup = strdup(cache_path);
     char *dir = dirname(dup);
@@ -485,14 +487,27 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         return -errno;
     }
 
-    if (http_get_stream(url, fp) != 0) {
+    int rc = http_get_stream(url, fp);
+    fclose(fp);
+    if (rc != 0) {
         free(fh);
-        fclose(fp);
         unlink(cache_path);
+         if (rc == 408)
+            return -ETIMEDOUT;  // Upload stalled
+        if (rc == 410)
+            return -ECANCELED;  // Upload probably cancelled
+        if (rc == 520)
+            return -ENOENT;     // File not found
         return -ECOMM;
     }
-    fclose(fp);
 
+    // set mtime to db mtime
+    struct timespec times[2];
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1].tv_sec = remote_mtime;
+    times[1].tv_nsec = 0;
+    utimensat(AT_FDCWD, cache_path, times, 0);
 
     /* stash fh_t in fi->fh */
     int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
@@ -503,7 +518,7 @@ static int do_open(const char *path, struct fuse_file_info *fi)
         return -errno;
     }
     fh->fd = fd;
-    fh->dirty = 1;
+    fh->dirty = 0;
     fi->fh = (uint64_t)(uintptr_t)fh;
     return 0;
 }
@@ -546,7 +561,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
 
     int returner = 0;
     if (!is_temp_path(path)) {
-        returner = upload_file_chunks(path, current_user_id, file_size, cache_path);
+        returner = upload_file_chunks(path, current_user_id, file_size, cache_path, st.st_mtim.tv_sec);
         if (returner != 0) {
             free(fh);
             return returner;
@@ -558,7 +573,7 @@ static int do_release(const char *path, struct fuse_file_info *fi)
     cache_record_append(path, file_size, current_user_id);
     cache_garbage_collection(current_user_id);
 
-    LOGMSG("leaving release (%d)", returner);
+    LOGMSG("File(%s) is dirty! leaving release (%d)", path, returner);
     free(fh);
     return returner;
 }
@@ -745,6 +760,7 @@ static int do_rmdir(const char *path)
 
 /* Suprisingly complicated, outlined into 4 cases:
  *   1) exchange flag set -> exchange files "from_path", "to_path"
+ *   1) exchange flag set -> exchange files "from_path", "to_path"
  *   2) replace "to_path" with "from_path" (same parent dir)
  *   3) replace "to_path" with "from_path" (diff parent dir)
  *   4) replacing file is TEMP, handle uploading to back-end
@@ -912,12 +928,21 @@ static int do_rename(const char *from_path,
        - NON-TEMP: rename existing record from from_path -> to_path
     */
     if (from_is_temp) {
-        rc = upload_file_chunks(to_path, current_user_id, source_size, newc);
+        FILE *fp = fopen(from_path, "rb");
+        if (!fp)
+            return -EIO;
+
+        struct stat st;
+        if (fstat(fileno(fp), &st) != 0) {
+            fclose(fp);
+            return -EIO;
+        }
+
+        rc = upload_file_chunks(to_path, current_user_id, source_size, newc, st.st_mtim.tv_sec);
         if (rc)
             return rc;
 
         // only touch cache if it's a file
-        struct stat st;
         if (stat(newc, &st) == 0 && S_ISREG(st.st_mode))
         cache_record_append(to_path, source_size, current_user_id);
         cache_garbage_collection(current_user_id);

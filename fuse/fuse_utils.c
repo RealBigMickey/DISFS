@@ -202,7 +202,7 @@ int backend_unlink(int current_user_id, const char *path) {
 }
 
 /* uploads the file at cache_path to the server backend */
-int upload_file_chunks(const char *logical_path, int current_user_id, size_t size, const char *cache_path) {
+int upload_file_chunks(const char *logical_path, int current_user_id, size_t size, const char *cache_path, time_t mtime) {
     FILE *fp = fopen(cache_path, "rb");
     if (!fp)
         return -EIO;
@@ -220,9 +220,12 @@ int upload_file_chunks(const char *logical_path, int current_user_id, size_t siz
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://%s/prep_upload?user_id=%d&path=%s&size=%ld&end_chunk=%d",
-            get_server_ip(), current_user_id, esc, (long)size, end_chunk);
+            "http://%s/prep_upload?user_id=%d&path=%s&size=%lu&end_chunk=%d&mtime=%lld",
+            get_server_ip(), current_user_id, esc, (unsigned long)size, end_chunk, (long long)mtime);
+            LOGMSG("MTIME IS %lld", (long long)mtime);
     curl_free(esc);
+
+    LOGMSG("url sent: %s", url);
 
     uint32_t status = 0;
     if (http_post_status(url, &status) != 0) {

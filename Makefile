@@ -51,7 +51,7 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-clean:
+clean: unmount
 	rm -f $(TARGET) $(OBJS)
 
 mount:

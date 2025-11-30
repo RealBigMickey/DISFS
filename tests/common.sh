@@ -13,7 +13,7 @@ note() { echo "[NOTE] $*"; }
 die() {
     local script
     script=$(basename "$0")
-    echo -e "\033[1;31mFAIL:\033[0m $script ❌ $*\n" >&2
+    echo -e "\033[1;31mFAIL:\033[0m $script $*\n" >&2
     exit 1
 }
 
@@ -63,5 +63,5 @@ init_test() {
 pass() {
     local script
     script=$(basename "$0")
-    echo -e "\033[1;32mPASS:\033[0m $script ✅ \n"
+    echo -e "\033[1;32mPASS:\033[0m $script\n"
 }

@@ -127,12 +127,13 @@ upload_tracking: dict[int, tuple[int, asyncio.Event]] = {}
 async def prep_upload():
     """
     Called by do_release to prepare for upload.
-    POST /prep_upload?user_id=22&path=foo/bar.txt&size=1048576&end_chunk=2
+    POST /prep_upload?user_id=22&path=foo/bar.txt&size=1048576&end_chunk=2&mtime=123
     """
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path", "").lstrip("/")
     size = request.args.get("size", "0")
     end_chunk = request.args.get("end_chunk", "0")
+    true_mtime = request.args.get("mtime", "0");
     
     if not raw_path:
         return "Missing path", 400
@@ -140,6 +141,8 @@ async def prep_upload():
     try:
         size = int(size)
         end_chunk = int(end_chunk)
+        true_mtime = int(true_mtime)
+        print("MTIME IS ", true_mtime)
     except ValueError:
         return "Invalid size or end_chunk", 400
 
@@ -174,7 +177,7 @@ async def prep_upload():
                 i_mtime = $2
             WHERE id = $3
             """,
-            size, int(time.time()), node_id
+            size, true_mtime, node_id
         )
         
 
@@ -581,8 +584,8 @@ async def truncate_file():
         
         await conn.execute("DELETE FROM file_chunks WHERE node_id=$1", node_id)
 
-        await conn.execute("UPDATE nodes SET i_mtime=$1 WHERE id=$2",
-                            int(time.time()), node_id)
+        await conn.execute("UPDATE nodes SET i_mtime=$1, size=$2 WHERE id=$3",
+                            int(time.time()), size, node_id)
         
     return "", 201
 
@@ -616,28 +619,22 @@ async def unlink():
 async def rmdir():
     user_id = await validate_user(POOL)
     raw_path = request.args.get("path")
-    channel = discord_client.get_channel(discord_client.channel_id)
 
     async with POOL.acquire() as conn:
+        # ensure dir is empty
         dir_id = await resolve_node(conn, user_id, raw_path, expected_type=2)
+
         if not dir_id:
             return "", 520
-        
-        rows = await conn.fetch("""
-            SELECT file_chunks.message_id
-            FROM node_closure
-            JOIN nodes ON nodes.id = node_closure.descendant
-            JOIN file_chunks ON file_chunks.node_id = nodes.id
-            WHERE node_closure.ancestor = $1
-            AND nodes.type = 1
-        """, dir_id)
 
-    message_ids = [r["message_id"] for r in rows if r["message_id"] is not None]
-    await delete_messages(channel, message_ids)
+        child = await conn.fetchval(
+            "SELECT 1 FROM nodes WHERE parent_id=$1 LIMIT 1", dir_id
+        )
+        if child:
+            return "", 404
 
-    async with POOL.acquire() as conn, conn.transaction():
-        await conn.execute("DELETE FROM nodes WHERE id = $1", dir_id)
-    return "", 201
+        await conn.execute("DELETE FROM nodes WHERE id=$1", dir_id)
+    return '', 201
     
         
 

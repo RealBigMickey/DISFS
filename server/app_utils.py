@@ -43,7 +43,7 @@ async def validate_user(POOL):
     return uid
 
 
-async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, chunk_size ,tmp_name):
+async def dispatch_upload(POOL, discord_client, user_id, file_path: str, chunk, chunk_size, tmp_name):
     """
     Upload one chunk file to Discord and record message_id in DB.
     """

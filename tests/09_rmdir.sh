@@ -16,7 +16,7 @@ sync "$SANDBOX" || true
 sleep 1
 
 note "Attempting to remove non-empty directory (should fail)"
-if rm -rf "$NONEMPTY_DIR" 2>rmdir_err.log; then
+if rmdir "$NONEMPTY_DIR" 2>rmdir_err.log; then
     die "Non-empty directory removed without unlinking children"
 fi
 grep -q "File exists" rmdir_err.log || note "Expected 'File exists' or similar error seen"
