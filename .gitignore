@@ -19,3 +19,6 @@ mnt/
 .env
 logs.txt
 cache_status.txt
+rmdir_err.log
+test.c
+test

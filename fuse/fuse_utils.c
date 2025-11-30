@@ -222,7 +222,6 @@ int upload_file_chunks(const char *logical_path, int current_user_id, size_t siz
     snprintf(url, sizeof(url),
             "http://%s/prep_upload?user_id=%d&path=%s&size=%lu&end_chunk=%d&mtime=%lld",
             get_server_ip(), current_user_id, esc, (unsigned long)size, end_chunk, (long long)mtime);
-            LOGMSG("MTIME IS %lld", (long long)mtime);
     curl_free(esc);
 
     LOGMSG("url sent: %s", url);

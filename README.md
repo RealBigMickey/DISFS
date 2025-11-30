@@ -1,34 +1,24 @@
-# DISFS – A FUSE File System on Top of the Discord CDN
+# DISFS – A POSIX-compliant FUSE filesystem using Discord’s CDN as an object store.
 > ***Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*  
-> *It uses the Discord CDN solely for research and educational purposes.*  
-> *Tests aren't fully implemented yet, and file downloads currently don't block.*   WIP
+> *Uses the Discord CDN solely for research and educational purposes.*  
 
 
-**DISFS** turns Discord into a mountable POSIX file system.  
-Files aren’t stored locally – instead, they are split into chunks and uploaded as Discord attachments. Reads are streamed back on demand from a remote server.
+Turns Discord into a mountable POSIX file system!
+Files are split into chunks and uploaded as Discord attachments. Reads and writes go through a backend server, which forwards requests to Discord when necessary.
+The goal is to have just one backend service multiple clients. Thus all requests are stateless HTTP.  
+A passion project of mine •~•.
 
 - Client side: **C FUSE 3 daemon**  
 - Server side: **Python (Quart + PostgreSQL)**  
 
-A typical workflow looks like:
-- **Write a file** → split into chunks → upload via Discord bot → metadata stored in Postgres  
-- **Read a file** → daemon fetches chunks on demand, with caching & mtime reconciliation  
 
-Inspired by GNU naming, **DISFS = “DISFS Is a Service File System.”**
+Inspired by GNU naming, **DISFS = “DISFS Is a Service File System.”**  
 
----
+<img src="https://raw.githubusercontent.com/RealBigMickey/Freshman-projects/main/2025-11-30%2023-48-26~2.gif" width="600">
 
-## Features
-
-|    | Feature                        | Details                                                                                      |
-| -- | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| ✓  | **Mount anywhere**             | `./main /mnt/disfs` – works on vanilla Linux 5.x, no kernel mods                             |
-| ✓  | **Smart metadata**             | Closure-table schema in Postgres → O(1) emptiness test + efficient `rename`                  |
-| ✓  | **Pseudo-files for commands**  | Login/logout via `cat .command/ping/{user}` and `cat .command/pong`                          |
-| ✓  | **Local cache**                | Write-back cache in `~/.cache/disfs/{uid}/...` with delayed flush & `fsync` durability       |
-| ✓  | **Async backend**              | `asyncpg` + Discord WebSockets = no thread pools, high concurrency                           |
 
 ---
+
 
 ## Quick Start – FUSE Client
 
@@ -39,14 +29,12 @@ git clone https://github.com/RealBigMickey/DISFS
 cd disfs
 ```
 
-
 ### 2) Install dependencies
-
-FUSE side uses:
 - [`libfuse3`](https://github.com/libfuse/libfuse)
 - [`libcurl`](https://curl.se/libcurl/)
 - [`cJSON`](https://github.com/DaveGamble/cJSON)
 
+Simply run:
 ```bash
 sudo apt update
 sudo apt install libfuse3-dev libcurl4-openssl-dev libcjson-dev
@@ -64,7 +52,7 @@ make clean   # Clean + unmount
 ---
 
 ## Quick Start – Server backend
-/* For those who wish to run their own server */
+/* To host your own server */
 
 #### 1) Python dependencies
 
@@ -81,15 +69,15 @@ TOKEN="YOUR_DISCORD_BOT_TOKEN"
 # Feel free to change url, though other changes may be necessary
 # Get your bot token from: https://discord.com/developers/
 ```
+> *Sadly, details on Discord Bot's setup won't be provided here*  
 
 #### 3) Configure server/_config.py
-
 ```python
 NOTIFICATIONS_ID = YOUR_NOTIFICATION_CHANNEL_ID  # Your Discord channel ID
 VAULT_IDS = [YOUR_NOTIFICATION_CHANNEL_ID]       # Your Discord channel ID
 ```
 
-#### 4) Run server
+#### 4) Send it
 
 ```bash
 python3 -m server.main
@@ -98,19 +86,18 @@ python3 -m server.main
 Type `exit`, `q`, `quit` to exit server.
 `dog` to send a dog gif to notification server! 
 
+---
 
 ## Quick Start – Database
-
 DISFS requires a PostgreSQL database.
 
 ### 1. Install PostgreSQL
-
 ```bash
 sudo apt install postgresql postgresql-contrib
 ```
 
 ### 2. Set up the database
-Create user like so:
+Create a user like so:
 ```
 sudo -i -u postgres psql << EOF
 CREATE USER admin WITH PASSWORD 'password' CREATEDB;
@@ -119,7 +106,7 @@ CREATE DATABASE disfs_db OWNER admin;
 EOF
 ```
 
-3. Configure the `.env`:
+### 3. Configure the `.env`:
 Create a .env file in the project root.
 Set up the username and password like you have in step 2
 ```bash
@@ -128,54 +115,61 @@ DATABASE_URL="postgres://admin:password@localhost:5432/disfs_db"
 DISCORD_TOKEN="your_discord_bot_token_here"
 ```
 
-That's it! When you run the server, the necessary tables will be automatically created.
+That's it! When you run the server, the necessary tables should be automatically created.
 
----
-## Metadata & Storage
-
-- **Database:** PostgreSQL
-
-- **Schema:** Closure tables (nodes, node_closure, file_chunks)
-
-- **Logical path:** Path seen by the user in the mounted FS (/foo/bar.txt)
-
-- **Local cache path:** ~/.cache/disfs/{user_id}/foo/bar.txt
-
-Helper command ↓
+Helper command if needed ↓
 ```bash
 # Deletes all rows from db quickly and simply
 psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTART IDENTITY CASCADE;"
 ```
-
 --- 
+### Usage
+Use `.command` prefix to access commands.
+cat -> do said thing
+ls -> see command list
+
+For example, by default there should be the user William:
+```bash
+$ ls mnt/.command   # Command list
+$ cat mnt/.command/register/Arthur  # Register user 'Arthur'
+$ cat mnt/.command/pong # Logout
+$ cat mnt/.command/serverip/192.0.2.123 # Change IP if the server isn't on local
+```
+Once logged in, use it as if a standard directory!
+
 ### Changelog
 
 v0.1: First working release (basic FUSE FS + Discord backend).  
-v0.2: Added first version of cache control (local cache directory + eviction logic).  
+v0.2: Add first version of cache control (local cache directory + eviction logic).  
+v0.3: Add blocking to reads, test cases and fix a TON of bugs. *WIP*  
 
+---
 
-### Known Limitations / TODO
-- No per-user encryption yet (planned: AES-GCM chunk layer).
-- All files currently in a single Discord channel → needs sharding by hash prefix.
-- Still using synchronous libcurl in the FUSE path → plan to migrate to fully async.
-- Directory listings = CSV hits, no pagination (>1k entries may degrade).
-- No chunk integrity verification.
+### Future plans (TODO)
 
+#### Probably, hopefully soon:
+- Linting
+- Lots and lots and lots of testcases.
+- Unify bracket indentation on functions
+- Don't call getenv("HOME") in every BUILD_CACHE_PATH
+- Test sure pipes and redirection thoroughly
 
-### Roadmap
-- [ ] Cache record system
-- [ ] Cache version control, only downloading new cache when stale
-- [ ] Add encryption layer (AES-GCM per user)
-- [ ] Multi-channel sharding for scalability
-- [ ] Async streaming with aiohttp instead of sync libcurl
-- [ ] Per-chunk integrity check (SHA-256)
-- [ ] Smarter eviction in local cache
+#### Probably not soon:
+- Change logging logic (currently just writes to .txt files lol)
+- Change cache manager to use a hashmap-linkedlist
+- Make Discord Bot be more wary of API limits
+- Add more Discord Bots, relieving API limits
+- Add a threadpool or worker tasks to handle multiple user requests
+- Add keys to wait_ready, ensuring that download requests are only valid when the file is fully ready
+- Add security to account logins and sessions, rather than just an integer
+- Safety nets to try and prevent manual malicious http requests
+- Some sort of encryption would be nice
+
+Any and all input is greatly appreciated! Contact me at williamclivestevens1205@gmail.com or submit a pull request.
 
 ---
 
 ### Credits
-- FUSE client written in C (libfuse3)
-- Server in Python (Quart + asyncpg)
-- Metadata schema: Closure Tables in PostgreSQL
-
+*Prof. Jserv, for pushing me to go above and beyond.*  
+*Peers of NCKU CSIE for their valuable input.*  
 

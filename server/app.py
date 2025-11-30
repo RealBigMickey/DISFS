@@ -142,7 +142,6 @@ async def prep_upload():
         size = int(size)
         end_chunk = int(end_chunk)
         true_mtime = int(true_mtime)
-        print("MTIME IS ", true_mtime)
     except ValueError:
         return "Invalid size or end_chunk", 400
 

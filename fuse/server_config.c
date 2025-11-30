@@ -30,13 +30,13 @@ int change_server_ip(const char *ip) {
             dot_count++;
             num = 0;
         } else if (IS_ASCII_NUMBER(c)) {
+            digit_count++;
             num *= 10;
             num += c - '0';
+    
+            if (!U8_BIT_RANGE(num) || digit_count > 3)
+                return -1;
         } else 
-            return -1;
-        
-        digit_count++;
-        if (!U8_BIT_RANGE(num) || digit_count > 3)
             return -1;
     }
     if (dot_count != 3)
