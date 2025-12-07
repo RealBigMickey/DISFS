@@ -446,6 +446,8 @@ static int do_open(const char *path, struct fuse_file_info *fi)
 
         if (st.st_mtime == remote_mtime) {
             int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+            if (fi->flags & O_APPEND)
+                flags |= O_APPEND;
             int fd = open(cache_path, flags);
             if (fd < 0) {
                 free(fh);
@@ -511,6 +513,8 @@ static int do_open(const char *path, struct fuse_file_info *fi)
 
     /* stash fh_t in fi->fh */
     int flags = (fi->flags & O_ACCMODE) == O_RDONLY ? O_RDONLY : O_RDWR;
+    if (fi->flags & O_APPEND)
+        flags |= O_APPEND;
     int fd = open(cache_path, flags);
     if (fd < 0) {
         free(fh);

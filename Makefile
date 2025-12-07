@@ -34,7 +34,8 @@ TESTS_NAMES = \
     01_setup.sh 02_upload_download.sh 03_stat_mtime.sh \
     04_listdir.sh 05_rename_in_place.sh 06_rename_dirs_move.sh \
     07_swap.sh 08_truncate_unlink.sh 09_rmdir.sh 10_empty_files.sh \
-	11_overwrite.sh 12_large_files.sh
+	11_overwrite.sh 12_large_files.sh 13_append.sh 14_nested_dir.sh \
+	15_random_read.sh 16_random_write.sh 17_concurrency.sh
 
 TESTS := $(addprefix tests/,$(TESTS_NAMES))
 
@@ -77,11 +78,16 @@ test: all
 	    echo "==> $$t"; \
 	    bash "$$t"; \
 	done
-	@echo "All tests passed!"
+	@echo "All tests passed! Note that queued upload requests will still be going in the background."
 
 test-%: all
-	@echo "Running test $*..."
-	@bash tests/$*.sh
+	@file=$(wildcard tests/$*_*.sh); \
+	if [ -z "$$file" ]; then \
+		echo "No matching test for $*"; exit 1; \
+	fi; \
+	echo "Running $$file"; \
+	bash "$$file"
+
 
 # Declare commands
 .PHONY: all clean mount unmount test

@@ -374,10 +374,8 @@ async def mkdir():
     
 
     parts = raw_path.split("/")
-    if len(parts) == 2:
-        parent_raw = parts[0]
-    else:
-        parent_raw = "" 
+    filename = parts[-1]
+    parent_raw = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
     filename = parts[-1]
 
