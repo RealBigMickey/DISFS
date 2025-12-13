@@ -1,8 +1,9 @@
 import asyncio
 import time
 import os
+from collections import defaultdict
 from quart import Quart, request, jsonify, Response
-from server._config import DATABASE_URL, TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS, FILE_CHUNK_TIMEOUT
+from server._config import DATABASE_URL, TOKEN, NOTIFICATIONS_ID, DATABASE_URL, VAULT_IDS, FILE_CHUNK_TIMEOUT, RATE_LIMIT_WINDOW, RATE_LIMIT_REQUESTS, rate_limited_paths
 from server.discord_api import get_client, delete_messages
 import asyncpg
 import tempfile
@@ -28,6 +29,67 @@ upload_queue: asyncio.Queue = asyncio.Queue()
 
 CURRENT_USER_ID = None
 CURRENT_USERNAME = ""
+
+
+request_history: dict[tuple[int, str], list[float]] = defaultdict(list)
+
+def check_rate_limit(user_id: int, route: str) -> tuple[bool, float]:
+    key = (user_id, route)
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW
+
+    # Remove stale timestamps
+    request_history[key] = [ts for ts in request_history[key] if ts > cutoff]
+
+    if len(request_history[key]) >= RATE_LIMIT_REQUESTS:
+        oldest = request_history[key][0]
+        retry_in = oldest + RATE_LIMIT_WINDOW - now
+        return False, max(0, retry_in)
+    
+    request_history[key].append(now)
+    return True, 0.0
+
+
+
+@app.before_request
+async def rate_limit_middleware():
+    """Per-user, per-route limiting"""
+
+    if request.path not in rate_limited_paths:
+        return
+    
+
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return
+    try:
+        user_id = int(user_id)
+    except ValueError:
+        return
+    
+    route = request.path
+    allowed, retry_in = check_rate_limit(user_id, route)
+    
+    if not allowed:
+        print(f"Rate limit exceeded for user {user_id}: {route}")
+        
+        resp = jsonify({
+            "message": "Rate limit reached!",
+            "retry_after": retry_in,
+            "global": False
+        })
+        resp.status_code = 429
+        resp.headers["Retry-After"] = str(int(retry_in) + 1)
+        resp.headers['Retry-After'] = str(int(retry_in) + 1)
+        resp.headers['X-RateLimit-Limit'] = str(RATE_LIMIT_REQUESTS)
+        resp.headers['X-RateLimit-Remaining'] = '0'
+        resp.headers['X-RateLimit-Reset'] = str(int(time.time() + retry_in))
+        resp.headers['X-RateLimit-Reset-After'] = f"{retry_in:.2f}"
+        return resp
+
+
+
+
 
 
 async def startup():
@@ -377,7 +439,6 @@ async def mkdir():
     filename = parts[-1]
     parent_raw = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
-    filename = parts[-1]
 
     now = int(time.time())
     async with POOL.acquire() as conn, conn.transaction():

@@ -2,6 +2,7 @@ import discord
 import asyncio
 import aiohttp
 import datetime
+import logging
 
 """
 Note: Functions are subject to changes and may need maintance on Discord api changes.
@@ -38,6 +39,11 @@ class DiscordClient(discord.Client):
             msg = await channel.fetch_message(message_id)
         except discord.NotFound:
             raise ValueError("Message not found")
+        except discord.HTTPException as e:
+            if e.status == 429:
+                logging.warning(f"Hit Discord rate limit fetching message {message_id}")
+            raise
+
         if not msg.attachments:
             raise ValueError("No attachments found on this message")
         url = msg.attachments[0].url
@@ -83,25 +89,20 @@ async def delete_message_single(channel, message_id: int, max_retries: int = 3):
             msg = await channel.fetch_message(message_id)
             await msg.delete()
             return
+        except discord.NotFound:    # already deleted
+            return
         except discord.HTTPException as e:
-            status = e.status
-            if status == 404:
-                # already deleted
-                return
-            if status == 429:
-                # rate limited, retries
-                retry_after = e.response.headers.get("retry_after") or e.response.headers.get("Retry-After")
-                try:
-                    wait = float(retry_after)
-                except Exception:
-                    wait = 1.0 * attempt
-                await asyncio.sleep(wait)
-                continue
-            discord.logging.exception(f"Failed to delete message {message_id}: HTTP {status}")
-            break
-        except Exception:
-            discord.logging.exception(f"Unexpected exception deleting message {message_id}")
-            break
+            if e.status == 429:
+                logging.warning(f"Rate limited deleting message {message_id}, discord.py will retry")
+            else:
+                logging.error(f"Failed to delete message {message_id}: HTTP {e.status}")
+            
+            if attempt == max_retries:
+                break
+        except Exception as ex:
+            logging.exception(f"Unexpected error deleting message {message_id}")
+            if attempt == max_retries:
+                break
 
 
 async def delete_messages_bulk(channel, message_ids: list[int]):
@@ -110,35 +111,32 @@ async def delete_messages_bulk(channel, message_ids: list[int]):
     Fallback to individual on failure.
     As of 2025-10-07 only works for messages younger than 14 days
     """
+    if not message_ids:
+        return
+    
     objs = [discord.Object(id=m) for m in message_ids]
     try:
         await channel.delete_messages(objs)
     except discord.HTTPException as e:
         if e.status == 429:
-            # rate limited
-            retry_after = e.response.headers.get("retry_after") or e.response.headers.get("Retry-After")
-            try:
-                wait = float(retry_after)
-            except:
-                wait = 1.0
-            await asyncio.sleep(wait)
-            # retry once
-            try:
-                await channel.delete_messages(objs)
-                return
-            except discord.HTTPException:
-                pass
+            logging.warning(f"Bulk delete rate limited, discord.py will handle it")
         # fallback to single deletion
+        logging.info(f"Bulk delete failed, falling back to individual deletions for {len(message_ids)} messages")
         for m in message_ids:
             await delete_message_single(channel, m)
+            await asyncio.sleep(0.1)
 
 
 async def delete_messages(channel, message_ids: list[int]):
     """
     Delete a list of message_ids. Use bulk for recent ones, single for older.
     """
+    if not message_ids:
+        return
+
     recent = [m for m in message_ids if is_recent(m)]
     older = [m for m in message_ids if not is_recent(m)]
+    logging.info(f"Deleting {len(recent)} recent and {len(older)} older messages")
 
     # bulk deletion for new messages
     for i in range(0, len(recent), 100):
