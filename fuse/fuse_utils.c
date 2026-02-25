@@ -187,8 +187,8 @@ int backend_unlink(int current_user_id, const char *path) {
     if (!esc) return -EIO;
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-             "http://%s/unlink?user_id=%d&path=%s",
-             get_server_ip(), current_user_id, esc);
+             "%s/unlink?user_id=%d&path=%s",
+             get_server_url(), current_user_id, esc);
     curl_free(esc);
 
     uint32_t status = 0;
@@ -220,8 +220,8 @@ int upload_file_chunks(const char *logical_path, int current_user_id, size_t siz
 
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://%s/prep_upload?user_id=%d&path=%s&size=%lu&end_chunk=%d&mtime=%lld",
-            get_server_ip(), current_user_id, esc, (unsigned long)size, end_chunk, (long long)mtime);
+            "%s/prep_upload?user_id=%d&path=%s&size=%lu&end_chunk=%d&mtime=%lld",
+            get_server_url(), current_user_id, esc, (unsigned long)size, end_chunk, (long long)mtime);
     curl_free(esc);
 
     LOGMSG("url sent: %s", url);
@@ -257,8 +257,8 @@ int upload_file_chunks(const char *logical_path, int current_user_id, size_t siz
         }
 
         snprintf(url, sizeof(url),
-                "http://%s/upload?user_id=%d&path=%s&chunk=%d",
-                get_server_ip(), current_user_id, esc, chunk);
+                "%s/upload?user_id=%d&path=%s&chunk=%d",
+                get_server_url(), current_user_id, esc, chunk);
         curl_free(esc);
 
         status = 0;
@@ -291,8 +291,8 @@ int backend_exists(int current_user_id, const char *path, int *exists_out) {
         return -EIO;
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-             "http://%s/stat?user_id=%d&path=%s",
-             get_server_ip(), current_user_id, esc);
+             "%s/stat?user_id=%d&path=%s",
+             get_server_url(), current_user_id, esc);
     curl_free(esc);
 
     uint32_t status = 0;

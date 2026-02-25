@@ -87,8 +87,8 @@ time_t fetch_mtime(const char *path, int user_id) {
     
     char url[URL_MAX];
     snprintf(url, sizeof(url),
-            "http://%s/mtime?user_id=%d&path=%s",
-            get_server_ip(), user_id, esc);
+            "%s/mtime?user_id=%d&path=%s",
+            get_server_url(), user_id, esc);
     curl_free(esc);
 
     string_buf_t resp = {0};

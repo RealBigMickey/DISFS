@@ -5,16 +5,16 @@
  */
 
 #include "server_config.h"
-static char server_ip[64] = "127.0.0.1:5050"; 
+static char server_url[128] = "http://0.0.0.0:5050"; 
 
-const char *get_server_ip() {
-    return server_ip;
+const char *get_server_url() {
+    return server_url;
 }
 
 #define U8_BIT_RANGE(x) (0 <= x  && x<= 255)
 #define IS_ASCII_NUMBER(x) ('0' <= x && x<= '9')
 
-/*0 -> success, -1 -> Bad format */
+/* 0 -> success, -1 -> Bad format */
 int change_server_ip(const char *ip) {
     const char *p = ip;
 
@@ -41,8 +41,28 @@ int change_server_ip(const char *ip) {
     }
     if (dot_count != 3)
         return -1;
-    snprintf(server_ip, sizeof(server_ip), "%s:%d", ip, PORT);
-    server_ip[sizeof(server_ip) - 1] = '\0';  // Just in case
+    snprintf(server_url, sizeof(server_url), "http://%s:%d", ip, PORT);
+    server_url[sizeof(server_url) - 1] = '\0';  // Just in case
     return 0;
 }
 
+
+
+/* 0 -> success, -1 -> Bad format
+ * Though crude, checks for any '/' characters past https:// to block injections
+ * Only accepts https for urls 
+ */
+int change_server_url(const char *new_url) {
+    if (!new_url)
+        return -1;
+    
+    const char *p = new_url;
+    if (*p == '\0')
+        return -1;
+    if (strchr(p, '/') != NULL)
+        return -1;
+    if (strlen(new_url) >= sizeof(server_url))
+        return -1;
+    snprintf(server_url, sizeof(server_url), "https://%s", new_url);
+    return 0;
+}
