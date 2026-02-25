@@ -1,9 +1,9 @@
-ifeq ($(wildcard .env), )
-    $(error .env file missing! Create one before running make)
+ifneq ($(wildcard .env),)
+    include .env
+    export
+else
+    $(warning .env file missing! Assuming local server isn't setup.)
 endif
-
-include .env
-export
 
 PROJECT_ROOT := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 

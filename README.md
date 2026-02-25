@@ -19,7 +19,25 @@ Inspired by GNU naming, **DISFS = “DISFS Is a Service File System”**
 
 ---
 
+**NOTE:**  
+Testing on the hosted server only requires the FUSE client.  
+```https://linuxer.tail0ed11f.ts.net/```  ![Status](https://img.shields.io/uptimerobot/status/m802424205-7bc8735dbd2b1972743faca2)
 
+## Testing on the hosted server:
+After setting up the FUSE client, start from the DISFS directory:  
+
+### 1) make it
+```bash
+$ make
+```
+### 2) change url to the host
+```bash
+$ cat mnt/.command/changeurl/linuxer.tail0ed11f.ts.net
+```
+Done.  
+Run ```make test-01``` or see [How to use](#how-to-use) for further instructions.
+
+---
 ## Quick Start – FUSE Client
 
 ### 1) Clone
@@ -44,7 +62,6 @@ sudo apt install libfuse3-dev libcurl4-openssl-dev libcjson-dev
 ```bash
 $ make
 ```
-
 ---
 
 ## Quick Start – Server backend
@@ -102,7 +119,7 @@ CREATE DATABASE disfs_db OWNER admin;
 EOF
 ```
 
-### 3. Configure the `.env`:
+### 3. Configure `.env`:
 Create a .env file in the project root. Set up the username and password like you have in step 2.
 ```bash
 # Modify the URL
@@ -118,7 +135,7 @@ Helper command if needed ↓
 psql "$DATABASE_URL" -c "TRUNCATE users, nodes, node_closure, file_chunks RESTART IDENTITY CASCADE;"
 ```
 --- 
-### Usage
+### How to use
 By default, DISFS always mounts to DISFS/mnt
 ```bash
 $ make  # makes and mounts fuse
@@ -130,10 +147,6 @@ Use `.command` prefix to access commands.
 `cat` -> do said thing   
 `ls` -> see command list   
 
-Run tests and test features quickly with
-```bash
-$ make test
-```
 
 #### Trying it yourself
 By default there should be the user William:
@@ -144,6 +157,11 @@ $ cat mnt/.command/pong # Logout
 $ cat mnt/.command/serverip/192.0.2.123 # Change IP if the server isn't on local
 ```
 Once mounted and logged in, use it as if a standard directory.
+
+Run tests and test features quickly with:  
+```bash
+$ make test
+```
 
 ### Changelog
 
