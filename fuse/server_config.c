@@ -15,7 +15,8 @@ const char *get_server_url() {
 #define IS_ASCII_NUMBER(x) ('0' <= x && x<= '9')
 
 /* 0 -> success, -1 -> Bad format */
-int change_server_ip(const char *ip) {
+int change_server_ip(const char *ip)
+{
     const char *p = ip;
 
     int dot_count = 0;
@@ -52,7 +53,8 @@ int change_server_ip(const char *ip) {
  * Though crude, checks for any '/' characters past https:// to block injections
  * Only accepts https for urls 
  */
-int change_server_url(const char *new_url) {
+int change_server_url(const char *new_url)
+{
     if (!new_url)
         return -1;
     

@@ -1,4 +1,4 @@
-# DISFS – A POSIX-compliant FUSE filesystem using Discord’s CDN as an object store.
+# DISFS – A FUSE filesystem using Discord’s CDN as an object store.
 > ***Disclaimer:** DISFS is an independent project and is not affiliated with or endorsed by Discord Inc.*  
 > *Uses the Discord CDN solely for research and educational purposes.*  
 
@@ -12,7 +12,7 @@ A passion project of mine •~•.
 - Server side: **Python (Quart + PostgreSQL)**  
 
 
-Inspired by GNU naming, **DISFS = “DISFS Is a Service File System”**  
+The name is an acronym. **DISFS = “DISFS Is Sort-of a File System”**  
 
 <img src="https://raw.githubusercontent.com/RealBigMickey/Freshman-projects/main/2025-11-30%2023-48-26~2.gif" width="600">
 
@@ -35,7 +35,8 @@ $ make
 $ cat mnt/.command/changeurl/linuxer.tail0ed11f.ts.net
 ```
 Done.  
-Run ```make test-01``` or see [How to use](#how-to-use) for further instructions.
+Run ```make test-01``` for a simple test, ```make test``` to run the full test suite.
+See [How to use](#how-to-use) for further instructions.
 
 ---
 ## Quick Start – FUSE Client
@@ -82,7 +83,7 @@ TOKEN="YOUR_DISCORD_BOT_TOKEN"
 # Feel free to change url, though other modifications may be necessary for it to work
 # Get a bot token from: https://discord.com/developers/
 ```
-> *Sadly, details on Discord Bot's setup won't be provided by me*  
+> *Details on setting up a Discord Bot won't be provided here :p*  
 
 #### 3) Configure server/_config.py
 ```python
@@ -165,9 +166,9 @@ $ make test
 
 ### Changelog
 
-v0.1: First working release (basic FUSE FS + Discord backend).  
+v0.1: MVP of the concept (basic FUSE FS + Discord backend).  
 v0.2: Add first version of cache control (local cache directory + eviction logic).  
-v0.3: Add blocking to reads, test cases and fix a TON of bugs. *WIP*  
+v0.3: Add blocking to reads, test cases, command overhaul and fixed bugs upon bugs upon bugs.
 
 ---
 
@@ -175,8 +176,7 @@ v0.3: Add blocking to reads, test cases and fix a TON of bugs. *WIP*
 
 #### Probably, hopefully soon:
 - Linting
-- Lots and lots and lots of testcases.
-- Unify bracket indentation on functions
+- More testcases.
 - Don't call getenv("HOME") in every BUILD_CACHE_PATH
 - Test sure pipes and redirection thoroughly
 

@@ -21,7 +21,8 @@ size_t write_cb(void *data, size_t size, size_t nmemb, void *userp)
     return total;
 }
 
-static size_t write_file_cb(void *ptr, size_t sz, size_t nm, void *userdata) {
+static size_t write_file_cb(void *ptr, size_t sz, size_t nm, void *userdata)
+{
     return fwrite(ptr, sz, nm, (FILE *)userdata);
 }
 
@@ -32,7 +33,8 @@ static size_t write_file_cb(void *ptr, size_t sz, size_t nm, void *userdata) {
  * LSB on status's address dictates GET or POST,
  * GET -> 0, POST -> 1
  */
-int http_request(const char *url, string_buf_t *resp, uint32_t *status) {
+int http_request(const char *url, string_buf_t *resp, uint32_t *status)
+{
     CURL *c = curl_easy_init();
     if (!c)
         return -1;
@@ -67,7 +69,8 @@ int http_request(const char *url, string_buf_t *resp, uint32_t *status) {
 /* Sends a POST request to destined http, saves response to status_out.
  * Discards response string.
  */
-int http_post_status(const char *url, uint32_t *status_out) {
+int http_post_status(const char *url, uint32_t *status_out)
+{
     // creates LSB flag for http_request to POST
     uint32_t status = 0;
     uint32_t *status_ptr = (uint32_t*)((uintptr_t)&status | 1);
@@ -81,7 +84,8 @@ int http_post_status(const char *url, uint32_t *status_out) {
 
 
 /* Gets file from http stream */
-int http_get_stream(const char *url, FILE *out) {
+int http_get_stream(const char *url, FILE *out)
+{
     CURL *c = curl_easy_init();
     if (!c)
         return -1;
@@ -126,7 +130,8 @@ int http_post_stream(const char *url, const void *data, size_t len, uint32_t *st
 
 
 
-void mkdir_p(const char *dir) {
+void mkdir_p(const char *dir)
+{
     char tmp[PATH_MAX];
     char *p;
     size_t len;
@@ -167,7 +172,8 @@ char *url_encode(const char* path)
 
 
 
-int same_parent_dir(const char *a, const char *b) {
+int same_parent_dir(const char *a, const char *b)
+{
     char *da = strdup(a), *db = strdup(b);
     if (!da || !db) {
         free(da);
@@ -182,7 +188,8 @@ int same_parent_dir(const char *a, const char *b) {
 
 
 
-int backend_unlink(int current_user_id, const char *path) {
+int backend_unlink(int current_user_id, const char *path)
+{
     char *esc = url_encode(path);
     if (!esc) return -EIO;
     char url[URL_MAX];
@@ -202,7 +209,8 @@ int backend_unlink(int current_user_id, const char *path) {
 }
 
 /* uploads the file at cache_path to the server backend */
-int upload_file_chunks(const char *logical_path, int current_user_id, size_t size, const char *cache_path, time_t mtime) {
+int upload_file_chunks(const char *logical_path, int current_user_id, size_t size, const char *cache_path, time_t mtime)
+{
     FILE *fp = fopen(cache_path, "rb");
     if (!fp)
         return -EIO;
@@ -285,7 +293,8 @@ int upload_file_chunks(const char *logical_path, int current_user_id, size_t siz
 
 
 
-int backend_exists(int current_user_id, const char *path, int *exists_out) {
+int backend_exists(int current_user_id, const char *path, int *exists_out)
+{
     char *esc = url_encode(path);
     if (!esc)
         return -EIO;

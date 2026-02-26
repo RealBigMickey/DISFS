@@ -24,7 +24,8 @@ char logs_debug_path[PATH_MAX] = {0};
 char cache_debug_path[PATH_MAX] = {0};
 
 /* Tries to get the project root, returns 0 on success */
-int _init_project_root(void) {
+int _init_project_root(void)
+{
     LOGMSG("Starting init_project_root");
     const char *env_root = getenv("PROJECT_ROOT");
     char resolved[PATH_MAX] = {0};
@@ -65,7 +66,8 @@ int _init_project_root(void) {
 
 
 /* Initialize cache, clear states, wipes any old cache */
-int cache_init(void) {
+int cache_init(void)
+{
     if (_init_project_root() != 0)
         return -1;
 
@@ -80,7 +82,8 @@ int cache_init(void) {
 
 
 /* Fetch mtime of file located on server's endpoint */
-time_t fetch_mtime(const char *path, int user_id) {
+time_t fetch_mtime(const char *path, int user_id)
+{
     char *esc = url_encode(path);
     if (!esc)
         return (time_t)-1;
@@ -107,7 +110,8 @@ time_t fetch_mtime(const char *path, int user_id) {
 
 static int _cache_record_delete_no_size(const char *full_path);
 /* Nukes files and directories without regard */
-int rmtree(const char *dir_path) {
+int rmtree(const char *dir_path)
+{
     DIR *dir = opendir(dir_path);
     if (!dir)
         return -1;
@@ -204,7 +208,8 @@ int cache_remove_subtree(const char *path, int current_user_id, unsigned flags)
 
 
 /* Clean-up on exit */
-void cache_exit(void) {
+void cache_exit(void)
+{
     MUTEX_LOCK(cache_lock);
     cache_t *cur = head, *next = NULL;
     while (cur) {
@@ -223,7 +228,8 @@ void cache_exit(void) {
 
 
 /* Create and append a cache_t node to the end of list */
-int cache_record_append(const char *path, off_t size, int current_user_id) {
+int cache_record_append(const char *path, off_t size, int current_user_id)
+{
     char cache_path[PATH_MAX];
     BUILD_CACHE_PATH(cache_path, current_user_id, path);
     LOGMSG("[GC] Appending cache: %s", cache_path);
@@ -257,7 +263,8 @@ int cache_record_append(const char *path, off_t size, int current_user_id) {
 
 
 /* Pop oldest cache entry from list */
-void cache_record_pop() {
+void cache_record_pop()
+{
     MUTEX_LOCK(cache_lock);
 
     if (!head) {
@@ -285,7 +292,8 @@ void cache_record_pop() {
 
 /* Delete cache_t entry with exact path, compares only path when size < 0 */
 static int _cache_record_delete_no_size(const char *full_path);
-int cache_record_delete(const char *path, int current_user_id, off_t size) {
+int cache_record_delete(const char *path, int current_user_id, off_t size)
+{
     char full_path[PATH_MAX];
     BUILD_CACHE_PATH(full_path, current_user_id, path);
 
@@ -328,7 +336,8 @@ int cache_record_delete(const char *path, int current_user_id, off_t size) {
 }
 
 /* Handle cases where size is unavailable */
-static int _cache_record_delete_no_size(const char *full_path) {
+static int _cache_record_delete_no_size(const char *full_path)
+{
     MUTEX_LOCK(cache_lock);
 
     cache_t **indirect = &head;
@@ -362,7 +371,8 @@ static int _cache_record_delete_no_size(const char *full_path) {
 }
 
 
-int cache_record_rename(const char *from_path, const char *to_path, off_t size) {
+int cache_record_rename(const char *from_path, const char *to_path, off_t size)
+{
     LOGMSG("[GC] local rename cache %s -> %s", from_path, to_path);
     MUTEX_LOCK(cache_lock);
 
@@ -389,7 +399,8 @@ int cache_record_rename(const char *from_path, const char *to_path, off_t size) 
 /* TEMP! To be changed into a proper command.
  * Done the simplest way for debug and testing 
  */
-void update_cache_status(void) {
+void update_cache_status(void)
+{
     if (!DISPLAY_CACHE_STATUS)
         return;
     LOGCACHE("[Cache status]\n"
@@ -400,7 +411,8 @@ void update_cache_status(void) {
 
 
 /* Evict oldest entries until under size threshold */
-void cache_garbage_collection(int current_user_id) {
+void cache_garbage_collection(int current_user_id)
+{
     while (used_bytes > max_bytes) {
         LOGMSG("[GC] overflow detected, booting earliest cache.");
         cache_record_pop(current_user_id);

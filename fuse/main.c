@@ -967,7 +967,8 @@ static int do_rename(const char *from_path,
 }
 
 
-static int do_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+static int do_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi)
+{
     LOGMSG("IN utimens");
     if (!logged_in || IS_COMMAND_PATH(path))
         return -EACCES;
@@ -1010,7 +1011,8 @@ static int do_utimens(const char *path, const struct timespec tv[2], struct fuse
     return 0;
 }
 
-void *do_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+void *do_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
+{
     LOGMSG("STARTING do_init");
     if(cache_init() != 0) {
         fprintf(stderr, "Cache failed to initialized.\n");
@@ -1019,7 +1021,8 @@ void *do_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
     return NULL;
 }
 
-void do_destroy(void *private_data) {
+void do_destroy(void *private_data)
+{
     cache_exit();
 }
 
